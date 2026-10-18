@@ -406,6 +406,7 @@ function render(){
       ${NAVS.map(navBtn).join("")}
       <div style="margin-top:auto" class="stack"><label class="field"><span>${t("language")}</span>${sel("lang",LANGS,S.lang,'data-act-change="lang"')}</label></div></aside>
     <main class="main"><div class="inner">
+      ${navigator.onLine===false?`<div class="banner"><b>Offline.</b>&nbsp;Everything still works — changes save on this device and sync nowhere until you export.</div>`:""}
       ${S.data.profile.demo?`<div class="banner warn"><b>Sample mill.</b>&nbsp;Every name, number and order here is example data. Log out and sign up to start your own mill.</div>`:""}
       ${views[S.tab]()}
     </div></main>
@@ -594,7 +595,7 @@ function viewStock(){
     <p class="small muted">Rates are indicative trade ranges for sawn timber from 2025–26 market listings. They vary a lot by grade, girth and city. Set your own rates when you add a wood.</p>
     <div class="tablewrap"><table><thead><tr><th>Wood</th><th>Category</th><th>Used for</th><th class="r">Indicative ₹/CFT</th><th></th></tr></thead><tbody>
     ${all.map(w=>{const has=!!d.stock[w.id];return `<tr><td><b>${esc(w.en)}</b><div class="small muted">${esc(w.hn||"")}</div></td><td><span class="sw" style="background:${CATCOL[w.cat]||"var(--muted)"}"></span>${esc(CATS[w.cat]||"Custom")}</td><td class="small">${esc(w.uses||"")}${w.note?`<div class="small" style="color:var(--bad)">${esc(w.note)}</div>`:""}</td>
-      <td class="r num">${w.lo?inr(w.lo)+" – "+inr(w.max).slice(1):"—"}</td><td class="r">${has?`<span class="pill p-ok">In my stock</span>`:`<button class="btn sm ${w.cat==="RS"?"":"primary"}" data-act="addStock" data-id="${w.id}">${t("add")}</button>`}</td></tr>`}).join("")||`<tr><td colspan="5" class="muted">No wood matches. Use “Wood not in list” to add it.</td></tr>`}
+      <td class="r num">${w.lo?inr(w.lo)+" – "+inr(w.max).slice(1):"—"}</td><td class="r">${has?`<span class="pill p-ok">In my stock</span>`:`<span class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm ${w.cat==="RS"?"":"primary"}" data-act="addStock" data-id="${w.id}">${t("add")}</button>${!w.cat?`<button class="btn sm danger" data-act="askDel" data-kind="cwood" data-id="${w.id}">${t("remove")}</button>`:""}</span>`}</td></tr>`}).join("")||`<tr><td colspan="5" class="muted">No wood matches. Use “Wood not in list” to add it.</td></tr>`}
     </tbody></table></div>`}`;
 }
 
@@ -791,13 +792,14 @@ const ACT={
     <div class="grid g2">${inp("qty","Quantity (CFT)","","number",'required min="0.01" step="0.01"')}${inp("date","Date",today(),"date")}</div>
     ${inp("note","Note",dir==="in"?"":"","text",dir==="in"?'placeholder="e.g. Bought at depot auction, lot 117"':'placeholder="e.g. Sold to Verma Furniture, wastage"')}
     <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="close">${t("cancel")}</button><button class="btn primary" type="submit">${t("save")}</button></div></form>`)},
-  askDel(el){const k=el.dataset.kind,id=el.dataset.id;const what={person:()=>S.data.people.find(p=>p.id===id).name,auction:()=>"this auction",stock:()=>woodName(id)+" from your stock",order:()=>"order #"+S.data.orders.find(o=>o.id===id).no,account:()=>"your account and all mill data"}[k]();
+  askDel(el){const k=el.dataset.kind,id=el.dataset.id;const what={person:()=>S.data.people.find(p=>p.id===id).name,auction:()=>"this auction",stock:()=>woodName(id)+" from your stock",cwood:()=>woodName(id)+" from your list",order:()=>"order #"+S.data.orders.find(o=>o.id===id).no,account:()=>"your account and all mill data"}[k]();
     const ord=k==="order"&&S.data.orders.find(o=>o.id===id);
     openModal(`<div class="stack"><h2>Remove ${esc(what)}?</h2><p class="muted">${k==="account"?"Everything for this mill is deleted from this device. Export a backup first if you need one.":ord&&ord.deducted&&ord.kind==="sale"?"The stock this order used will be added back. This cannot be undone.":"This cannot be undone."}</p><div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">${t("cancel")}</button><button class="btn danger" data-act="doDel" data-kind="${k}" data-id="${id||""}">${t("remove")}</button></div></div>`)},
   async doDel(el){const k=el.dataset.kind,id=el.dataset.id,d=S.data;
     if(k==="person")d.people=d.people.filter(p=>p.id!==id);
     if(k==="auction")d.auctions=d.auctions.filter(a=>a.id!==id);
     if(k==="stock")delete d.stock[id];
+    if(k==="cwood")d.customWoods=d.customWoods.filter(c=>c.id!==id);
     if(k==="order"){const o=d.orders.find(x=>x.id===id);if(o&&o.deducted&&o.kind==="sale")restoreStock(o);d.orders=d.orders.filter(x=>x.id!==id)}
     closeModal();
     if(k==="account"){await Store.del("mill_"+S.acct);if(S.acct!=="demo"){delete S.accounts[S.acct];await Store.set("accounts",S.accounts)}ACT.logout();toast("Account deleted");return}
@@ -875,6 +877,8 @@ document.addEventListener("keydown",e=>{
   if(e.shiftKey&&document.activeElement===first){last.focus();e.preventDefault()}
   else if(!e.shiftKey&&document.activeElement===last){first.focus();e.preventDefault()}});
 window.addEventListener("beforeunload",e=>{if(S.draft&&S.draft.dirty){e.preventDefault();e.returnValue=""}});
+window.addEventListener("online",()=>{if(S.screen==="app")render()});
+window.addEventListener("offline",()=>{if(S.screen==="app")render()});
 
 document.addEventListener("submit",async e=>{e.preventDefault();const form=e.target,kind=form.dataset.form;const fd=Object.fromEntries(new FormData(form));const d=S.data;
   const err=(m)=>{const x=form.querySelector("#authErr,#formErr");if(x)x.textContent=m};
