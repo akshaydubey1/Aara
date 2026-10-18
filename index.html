@@ -457,7 +457,7 @@ function viewAuth(){
       ${signup?`<form class="stack" data-form="signup" novalidate>
         <h2>${t("createAccount")}</h2>
         <div class="grid g2">${inp("mill",t("millName"),"","text","required")}${inp("owner",t("ownerName"),"","text","required")}</div>
-        <div class="grid g2">${inp("mobile",t("mobile"),"","tel",'required inputmode="numeric" maxlength="10" placeholder="10 digits"')}${inp("pin",t("pin")+" (4–6 digits)","","password",'required inputmode="numeric" maxlength="6"')}</div>
+        <div class="grid g2">${inp("mobile",t("mobile"),"","tel",'required inputmode="numeric" maxlength="16" placeholder="10 digits"')}${inp("pin",t("pin")+" (4–6 digits)","","password",'required inputmode="numeric" maxlength="6"')}</div>
         <div class="grid g2"><label class="field"><span>${t("state")}</span>${sel("state",[["","Select state"],...STATES],"","required")}</label>${inp("district",t("district"),"")}</div>
         <div class="grid g2">${inp("licence","Sawmill / WBI licence no.","","text",'placeholder="Optional"')}${inp("gstin","GSTIN","","text",'placeholder="Optional" maxlength="15"')}</div>
         <label class="check"><input type="checkbox" name="agree" id="f_agree" required><span>${esc(t("agree"))}. <button type="button" class="btn ghost sm" style="padding:0;min-height:0" data-act="legal">${t("terms")}</button></span></label>
@@ -466,7 +466,7 @@ function viewAuth(){
         <button class="btn primary" type="submit">${t("createAccount")}</button>
       </form>`:`<form class="stack" data-form="login" novalidate>
         <h2>${t("login")}</h2>
-        ${inp("mobile",t("mobile"),"","tel",'required inputmode="numeric" maxlength="10" autocomplete="username"')}
+        ${inp("mobile",t("mobile"),"","tel",'required inputmode="numeric" maxlength="16" autocomplete="username"')}
         ${inp("pin",t("pin"),"","password",'required inputmode="numeric" maxlength="6" autocomplete="current-password"')}
         <p class="small" id="authErr" style="color:var(--bad)"></p>
         <button class="btn primary" type="submit">${t("login")}</button>
@@ -549,7 +549,7 @@ function personForm(p){
   const lab=p.type==="labour";
   return `<form class="stack" data-form="person" data-id="${p.id||""}" data-type="${p.type}">
     <h2>${p.id?t("edit"):t("add")} · ${t(p.type==="owner"?"owners":p.type==="coowner"?"coowners":"labour")}</h2>
-    <div class="grid g2">${inp("name",t("name"),p.name,"text","required")}${inp("phone",t("phone"),p.phone,"tel",'inputmode="numeric" maxlength="10"')}</div>
+    <div class="grid g2">${inp("name",t("name"),p.name,"text","required")}${inp("phone",t("phone"),p.phone,"tel",'inputmode="numeric" maxlength="16"')}</div>
     <div class="grid g2">${inp("role",lab?"Work / role":"Role",p.role,"text",lab?'list="roles" placeholder="e.g. Sawyer, Helper, Loader"':"")}${inp("joined","Joined on",p.joined||today(),"date")}</div>
     <datalist id="roles">${["Head sawyer","Sawyer","Band-saw operator","Helper","Loader","Truck driver","Munshi (accounts)","Watchman","Log grader","Saw sharpener (filer)","Cleaner"].map(r=>`<option value="${r}">`).join("")}</datalist>
     ${lab?`<div class="grid g2"><label class="field"><span>Wage type</span>${sel("wageType",[["daily","Daily (dihadi)"],["monthly","Monthly salary"],["piece","Piece rate per CFT"]],p.wageType||"daily")}</label>${inp("wage",t("wage")+" (₹)",p.wage,"number",'min="0" step="1"')}</div>
@@ -664,7 +664,7 @@ function viewEstimate(){
   return `<div class="topbar"><div><button class="btn ghost sm" data-act="tab" data-v="orders" style="padding-left:0">← ${t("orders")}</button><h1>${o.saved?"Order":"Estimate"} <span class="lot" style="font-size:18px">${o.no}</span></h1></div>
     <div class="row">${o.saved?`<button class="btn sm" data-act="dupOrder">Duplicate</button>`:`<button class="btn sm danger" data-act="askDiscard">Discard</button>`}<span class="pill ${STATUS[o.status][1]}">${STATUS[o.status][0]}</span></div></div>
   <div class="card stack">
-    <div class="grid g4">${inp("customer",t("customer"),o.customer,"text",'data-of="customer"')}${inp("phone",t("phone"),o.phone,"tel",'data-of="phone" inputmode="numeric" maxlength="10"')}${inp("date","Date",o.date,"date",'data-of="date"')}
+    <div class="grid g4">${inp("customer",t("customer"),o.customer,"text",'data-of="customer"')}${inp("phone",t("phone"),o.phone,"tel",'data-of="phone" inputmode="numeric" maxlength="16"')}${inp("date","Date",o.date,"date",'data-of="date"')}
       <label class="field"><span>Order type</span>${sel("kind",[["sale","Timber sale (from my stock)"],["job","Job work / chirai (customer's wood)"]],o.kind,'data-act-change="okind"')}</label></div>
     <label class="field"><span>Notes / delivery terms (optional)</span><textarea name="notes" rows="2" data-of="notes" placeholder="e.g. Deliver to site gate 2; 15 days credit">${esc(o.notes||"")}</textarea></label>
     ${job?`<div class="banner">Job work: the customer brings their own logs. You charge only for sawing per CFT, and your stock is not touched.</div>`:""}
