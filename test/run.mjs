@@ -230,6 +230,12 @@ const test = `;(async () => {
   ok("empty order not saved", saveDraft() === false && S.data.orders.length === nOrders);
   S.draft.items[0].pcs = 4; S.draft.items[0].L = 7;
   ok("valid draft saves", saveDraft() === true && S.data.orders.length === nOrders + 1);
+
+  // print quote is customer-facing: mill + totals in, cost basis out
+  const pq = quotePrintHTML(S.draft);
+  ok("print quote shows mill and total, hides costs",
+     pq.includes("Imported Mill") && pq.includes("Total") &&
+     !pq.includes("break-even") && !pq.includes("Suggested") && !pq.includes("In stock"));
 })()`;
 
 const fn = new Function(

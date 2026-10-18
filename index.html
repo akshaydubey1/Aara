@@ -177,7 +177,26 @@ td.r,th.r{text-align:right}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(90px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;z-index:60;font-size:14px;max-width:calc(100% - 32px)}
 [dir=rtl] .nav{text-align:right}
 [dir=rtl] td,[dir=rtl] th{text-align:right}
-@media print{.rail,.bottom,.tabs,button,.topbar .row,#toast{display:none!important}body{background:#fff}.main{padding:0}.card,.tablewrap{border-color:#ccc;break-inside:avoid}}
+@media print{.rail,.bottom,.tabs,button,.topbar .row,#toast{display:none!important}body{background:#fff}.main{padding:0}.card,.tablewrap{border-color:#ccc;break-inside:avoid}
+  body[data-tab="estimate"] .inner>*:not(.printonly){display:none!important}
+  body[data-tab="estimate"] .printonly{display:block!important}}
+/* customer-facing quotation (print only — keeps cost/margin data off paper) */
+.printonly{display:none}
+.pq{font:14px/1.5 var(--font);color:#000}
+.pq-top{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #000;padding-bottom:10px}
+.pq-mill{margin:0;font-size:22px}
+.pq-muted{color:#444;font-size:12px}
+.pq-right{text-align:right}
+.pq-title{font-weight:800;font-size:16px;text-transform:uppercase;letter-spacing:.06em}
+.pq-cust{margin:12px 0}
+.pq-table{width:100%;border-collapse:collapse;margin:6px 0 10px}
+.pq-table th,.pq-table td{border:1px solid #999;padding:6px 8px;text-align:left;font-size:13px}
+.pq-table .r,.pq-tot .r{text-align:right;white-space:nowrap}
+.pq-tot{width:280px;margin-left:auto;border-collapse:collapse}
+.pq-tot td{padding:4px 8px;font-size:13px}
+.pq-grand td{border-top:2px solid #000;font-weight:800;font-size:15px}
+.pq-notes{margin-top:8px}
+.pq-sign{display:flex;justify-content:space-between;margin-top:56px;font-size:12px;color:#333}
 </style>
 
 </head>
@@ -395,6 +414,7 @@ const ASTAT={watching:["Watching","p-neutral"],registered:["Registered","p-info"
 function render(){
   document.documentElement.lang=S.lang;
   document.documentElement.dir=S.lang==="ur"?"rtl":"ltr";
+  if(document.body.dataset)document.body.dataset.tab=S.screen==="app"?S.tab:"";
   const app=$("#app");
   if(S.screen==="loading"){app.innerHTML=`<div style="min-height:60vh;display:grid;place-items:center"><div class="row"><div class="rings"></div><span class="muted">Loading…</span></div></div>`;return}
   if(S.screen==="auth"){app.innerHTML=viewAuth();return}
@@ -666,7 +686,39 @@ function viewEstimate(){
       <div class="row"><button class="btn primary" data-act="saveOrder">${t("save")}</button>${!o.deducted&&!job&&o.status==="quote"?`<button class="btn chalk" data-act="confirmOrder">Confirm & reduce stock</button>`:""}<button class="btn" data-act="wa">WhatsApp</button><button class="btn" data-act="copyQuote">Copy quote</button><button class="btn" data-act="print">Print / PDF</button></div>
       <p class="small muted" id="stockNote"></p>
       <textarea id="copyBox" rows="8" hidden readonly></textarea>
-    </div></div>`;
+    </div></div>${quotePrintHTML(o)}`;
+}
+
+/* printable quotation: mill header + item lines + totals, no internal costs */
+function quotePrintHTML(o){
+  const d=S.data,p=d.profile,tt=totals(o),job=o.kind==="job";
+  const amt=n=>(Math.round(+n||0)).toLocaleString("en-IN");
+  const desc=it=>{const w=woodName(it.wood);
+    if(it.mode==="sawn")return `${w} · ${it.L||0} ft × ${it.W||0} in × ${it.T||0} in × ${it.pcs||0} pcs`;
+    if(it.mode==="log")return `${w} log · girth ${it.G||0} in × ${it.L||0} ft × ${it.pcs||0} pcs (${it.formula==="true"?"true volume":"Hoppus"})`;
+    if(it.mode==="rft")return `${w} · ${it.L||0} running ft × ${it.pcs||0} pcs`;
+    return w};
+  const half=tt.gst/2;
+  return `<div class="printonly"><div class="pq">
+    <div class="pq-top"><div><h1 class="pq-mill">${esc(p.mill)}</h1>
+      <div class="pq-muted">${[p.district,p.state].filter(Boolean).map(esc).join(", ")}${p.gstin?" · GSTIN "+esc(p.gstin):""}${p.mobile?" · "+esc(p.mobile):""}</div></div>
+      <div class="pq-right"><div class="pq-title">${job?"Job work bill":o.status==="quote"?"Estimate":"Order"}</div><div>#${o.no} · ${fdate(o.date)}</div></div></div>
+    <div class="pq-cust"><b>To:</b> ${esc(o.customer||"Walk-in customer")}${o.phone?" · "+esc(o.phone):""}</div>
+    <table class="pq-table"><thead><tr><th>#</th><th>Description</th><th class="r">Qty</th><th class="r">Rate ₹</th><th class="r">Amount ₹</th></tr></thead><tbody>
+      ${o.items.map((it,i)=>{const q=lineQty(it);return `<tr><td>${i+1}</td><td>${esc(desc(it))}</td><td class="r">${it.mode==="rft"?fx(q,1)+" rft":fx(q,3)+" CFT"}</td><td class="r">${amt(it.rate)}</td><td class="r">${amt(q*(+it.rate||0))}</td></tr>`}).join("")}
+    </tbody></table>
+    <table class="pq-tot"><tbody>
+      <tr><td>Items</td><td class="r">${amt(tt.sub)}</td></tr>
+      ${+o.transport?`<tr><td>Transport</td><td class="r">${amt(o.transport)}</td></tr>`:""}
+      ${+o.discount?`<tr><td>Discount</td><td class="r">− ${amt(o.discount)}</td></tr>`:""}
+      ${o.gstOn?(d.settings.gstMode==="intra"?`<tr><td>CGST ${d.settings.gst/2}%</td><td class="r">${amt(half)}</td></tr><tr><td>SGST ${d.settings.gst/2}%</td><td class="r">${amt(half)}</td></tr>`:`<tr><td>IGST ${d.settings.gst}%</td><td class="r">${amt(tt.gst)}</td></tr>`):""}
+      <tr class="pq-grand"><td>Total</td><td class="r">₹${amt(tt.total)}</td></tr>
+      ${+o.advance?`<tr><td>Advance received</td><td class="r">− ${amt(o.advance)}</td></tr><tr><td><b>Balance due</b></td><td class="r"><b>₹${amt(tt.balance)}</b></td></tr>`:""}
+    </tbody></table>
+    ${o.notes?`<p class="pq-notes"><b>Notes:</b> ${esc(o.notes)}</p>`:""}
+    <p class="pq-muted">${job?"Sawing charges only. Customer's own timber.":"Rates valid for 7 days, subject to stock."} Volume measured in cubic feet (CFT).</p>
+    <div class="pq-sign"><span>Customer signature</span><span>For ${esc(p.mill)}</span></div>
+  </div></div>`;
 }
 
 function recalc(){
@@ -948,7 +1000,9 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
   const h0=(location.hash||"").slice(1);
   if(h0==="demo"||h0.startsWith("demo/")){
     await enter("demo",(await Store.get("mill_demo"))||demoMill());
-    const sub=h0.split("/")[1];if(["people","auctions","stock","orders","more"].includes(sub)){S.tab=sub;render()}
+    const sub=h0.split("/")[1];
+    if(sub==="estimate"){ACT.newOrder();return}
+    if(["people","auctions","stock","orders","more"].includes(sub)){S.tab=sub;render()}
     return}
   S.screen="auth";render();
 })();
