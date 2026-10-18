@@ -3,7 +3,7 @@
    fallback; static assets are cache-first and filled as they are fetched.
    Bump CACHE when shipping changes that must bypass old cached assets. */
 const CACHE="aara-v3";
-const ASSETS=["./","./index.html","./manifest.webmanifest","./icon.svg","./icon-192.png","./icon-512.png","./apple-touch-icon.png","./vendor/html2canvas.min.js","./vendor/jspdf.umd.min.js"];
+const ASSETS=["./","./index.html","./sync.js","./manifest.webmanifest","./icon.svg","./icon-192.png","./icon-512.png","./apple-touch-icon.png","./vendor/html2canvas.min.js","./vendor/jspdf.umd.min.js"];
 
 self.addEventListener("install",e=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting()));

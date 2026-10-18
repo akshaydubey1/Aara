@@ -1,0 +1,17 @@
+{
+  "appId": "in.aara.app",
+  "appName": "Aara",
+  "webDir": "www",
+  "backgroundColor": "#0d1b12",
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "always"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

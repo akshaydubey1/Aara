@@ -376,21 +376,26 @@ const S={lang:"en",screen:"loading",authTab:"login",tab:"home",acct:null,data:nu
 try{S.lang=localStorage.getItem("aara:lang")||"en"}catch(e){}
 
 const Store={db:null,uid:null,
-  async init(){ /* Remote (sync.js) attaches a cloud store here when configured: it sets this.db, this.uid and S.mode="cloud". */ },
+  async init(){
+    try{if(localStorage.getItem("aara:cloud")){await loadScript("sync.js");if(window.AaraSync)await window.AaraSync.boot(Store)}}catch(e){S.mode="device"}
+  },
   ref(k){return this.db.collection("data/users/"+this.uid).doc(k)},
   async get(k){
-    if(this.db){try{const s=await this.ref(k).get();return s.exists?s.data().v:null}catch(e){}}
+    if(this.db){try{const s=await this.ref(k).get();if(s.exists){const v=s.data().v;try{localStorage.setItem("aara:"+k,JSON.stringify(v))}catch(e){}return v}}catch(e){}}
     try{const v=localStorage.getItem("aara:"+k);return v?JSON.parse(v):null}catch(e){return null}
   },
-  async set(k,v){
-    if(this.db){try{await this.ref(k).set({v,t:Date.now()});return true}catch(e){toast("Could not save online — saved on this device; will sync when reconnected.");}}
-    try{localStorage.setItem("aara:"+k,JSON.stringify(v));return true}catch(e){toast("Could not save — browser storage may be full. Export a backup from More.");return false}
+  async set(k,v){const t=Date.now();let ok=true;
+    try{localStorage.setItem("aara:"+k,JSON.stringify(v));localStorage.setItem("aarat:"+k,String(t))}catch(e){toast("Could not save — browser storage may be full. Export a backup from More.");ok=false}
+    if(this.db){try{await this.ref(k).set({v,t})}catch(e){toast("Could not save online — saved on this device; will sync when reconnected.")}}
+    return ok
   },
   async del(k){
+    try{localStorage.removeItem("aara:"+k);localStorage.removeItem("aarat:"+k)}catch(e){}
     if(this.db){try{await this.ref(k).delete()}catch(e){}}
-    try{localStorage.removeItem("aara:"+k)}catch(e){}
   }
 };
+// Local write timestamps — used by the sync layer for last-write-wins merges.
+Store.localT=k=>{try{return +(localStorage.getItem("aarat:"+k)||0)}catch(e){return 0}};
 let saveTimer=null;
 function persist(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(S.acct&&S.data)Store.set("mill_"+S.acct,S.data)},400)}
 
@@ -1106,9 +1111,10 @@ function viewMore(){
     <div class="row" style="justify-content:flex-end"><button class="btn primary" type="submit">${t("save")}</button></div></form>
   <div class="grid g3">
     <div class="card stack"><h3>${t("language")}</h3>${sel("lang2",LANGS,S.lang,'data-act-change="lang"')}<p class="small muted">Menus and labels follow your language. Wood names always show English and Hindi.</p></div>
-    <div class="card stack"><h3>Your data</h3><p class="small muted">${S.mode==="cloud"?"Saved privately to your account.":"Saved in this browser on this device."} Backups, import and export are in the section below.</p><button class="btn" data-act="tuneUp">Check & repair data</button></div>
+    <div class="card stack"><h3>Your data</h3><p class="small muted">${S.mode==="cloud"?"Saved to your account and this device — works offline either way.":"Saved in this browser on this device."} Backups, import and export are in the section below.</p><button class="btn" data-act="tuneUp">Check & repair data</button></div>
     <div class="card stack"><h3>Account</h3><button class="btn" data-act="pin">Change PIN</button><button class="btn" data-act="legal">${t("terms")}</button><button class="btn" data-act="logout">${t("logout")}</button><button class="btn danger" data-act="askDel" data-kind="account">Delete account & data</button></div>
   </div>
+  <div class="card stack"><h3>Sync across devices <span class="pill ${window.AaraSync&&window.AaraSync.connected()?"p-ok":"p-sec"}">${window.AaraSync&&window.AaraSync.connected()?"Connected":"Optional"}</span></h3>${syncCard()}</div>
   ${viewWaSettings()}
   <section class="card stack" id="backup"><div class="row between"><h2>Backup & restore</h2><button class="btn primary" data-act="bkNow">Back up now</button></div>
     ${S.acct==="demo"?`<div class="banner warn">The sample mill is not backed up automatically. Sign up to protect your own data.</div>`:""}
@@ -1123,6 +1129,14 @@ function viewMore(){
     </div>
     <div class="stack"><h3>Saved backups</h3><div id="bkList"><p class="small muted">Loading…</p></div></div></div>
   </section>`;
+}
+
+function syncCard(){const A=window.AaraSync;
+  if(A&&A.connected())return `<p class="small">Connected as <b>${esc(A.dest())}</b>. Your mill data syncs between this device and your other phones or computers whenever you are online. Everything also stays saved on this device.</p><div class="row"><button class="btn" data-act="syncNow">Sync now</button><button class="btn" data-act="syncOff">Disconnect</button></div>`;
+  const c=A?A.config():{},pend=A?A.pending():"";
+  return `<p class="small muted">Optional — Aara works fully without it. To see the same mill on a second phone or computer, create a free Supabase project and run the one-time setup SQL from <code>supabase/schema.sql</code>, then enter its URL and anon key below.</p>
+    <form data-form="synccfg" class="stack"><input class="inp" name="url" placeholder="https://yourproject.supabase.co" value="${esc(c.url||"")}" inputmode="url" autocomplete="off"><input class="inp" name="key" placeholder="Anon (public) key" value="${esc(c.key||"")}" autocomplete="off"><input class="inp" name="dest" placeholder="Your email — the sign-in code goes here" value="${esc(pend)}" inputmode="email"><p class="small" id="formErr" style="color:var(--bad)"></p><button class="btn primary">Save &amp; send code</button></form>
+    ${pend?`<form data-form="syncv" class="stack"><input class="inp" name="code" placeholder="Code sent to ${esc(pend)}" inputmode="numeric" maxlength="8" autocomplete="one-time-code"><p class="small" id="formErr" style="color:var(--bad)"></p><button class="btn primary">Verify &amp; connect</button></form>`:""}`
 }
 
 function legalHTML(){return `<div class="stack"><div class="row between"><h2>${t("terms")}</h2><button class="btn icon" data-act="close" aria-label="Close">×</button></div>
@@ -1384,6 +1398,13 @@ async function makePdf(o){
     return pdf.output("blob")}finally{host.remove()}
 }
 async function saveBlob(blob,name){
+  const cap=window.Capacitor;
+  if(cap&&cap.isNativePlatform&&cap.isNativePlatform()){try{
+    const fs=cap.Plugins&&cap.Plugins.Filesystem;
+    if(fs){const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=rej;r.readAsDataURL(blob)});
+      const w=await fs.writeFile({path:name,data:b64,directory:"CACHE"});const sh=cap.Plugins&&cap.Plugins.Share;
+      if(sh){try{await sh.share({title:name,url:w.uri})}catch(e){if(e&&e.message&&!/cancel/i.test(e.message))toast("Saved: "+name)}}
+      else toast("Saved: "+name);return}}catch(e){}}
   const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),8000);toast("Downloaded "+name)}
 
 /* ============ modal ============ */
@@ -1503,6 +1524,8 @@ const ACT={
     if(el.dataset.v==="replace"){const keep={mobile:S.data.profile.mobile};S.data=migrate(JSON.parse(JSON.stringify(imp.d)));S.data.profile.mobile=keep.mobile;persist();closeModal();render();toast("All data replaced from the file")}
     else{const log=mergeInto(S.data,imp.d);migrate(S.data);persist();closeModal();render();openModal(`<div class="stack"><h2>Merged</h2><ul class="small" style="margin:0;padding-left:18px">${log.map(x=>`<li>${esc(x)}</li>`).join("")}</ul><div class="row" style="justify-content:flex-end"><button class="btn primary" data-act="close">Done</button></div></div>`)}
     S.pendingImport=null},
+  async syncNow(el){el.disabled=true;try{await window.AaraSync.pullAll();toast("Synced");render()}catch(e){toast("Could not reach the server — you may be offline. Nothing was lost.")}el.disabled=false},
+  syncOff(){window.AaraSync.disconnect();toast("Disconnected — data stays on this device.");render()},
   tuneUp(){const r=tuneUp(S.data);persist();render();
     openModal(`<div class="stack"><h2>Data check</h2>${r.fix.length?`<h3>Repaired</h3><ul class="small" style="margin:0;padding-left:18px">${r.fix.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:`<p class="pos">No problems found. Your data is in good shape.</p>`}
       ${r.note.length?`<h3>Worth a look</h3><ul class="small" style="margin:0;padding-left:18px">${r.note.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}
@@ -1525,7 +1548,10 @@ const ACT={
   async pdf(el){const o=S.shareOrder;el.disabled=true;const lbl=el.textContent;el.textContent="Making PDF…";
     try{const blob=await makePdf(o);await saveBlob(blob,pdfName(o))}catch(e){toast("Could not make the PDF. Check your internet connection and try again.")}
     el.disabled=false;el.textContent=lbl},
-  async sharePdf(el){const o=S.shareOrder;el.disabled=true;try{const blob=await makePdf(o);const file=new File([blob],pdfName(o),{type:"application/pdf"});await navigator.share({files:[file],title:"Estimate #"+o.no,text:S.data.profile.mill+" estimate #"+o.no})}catch(e){if(e&&e.name!=="AbortError")toast("Sharing is not available. Download the PDF instead.")}el.disabled=false},
+  async sharePdf(el){const o=S.shareOrder;el.disabled=true;try{const blob=await makePdf(o);
+    const cap=window.Capacitor;
+    if(cap&&cap.isNativePlatform&&cap.isNativePlatform()){await saveBlob(blob,pdfName(o));el.disabled=false;return}
+    const file=new File([blob],pdfName(o),{type:"application/pdf"});await navigator.share({files:[file],title:"Estimate #"+o.no,text:S.data.profile.mill+" estimate #"+o.no})}catch(e){if(e&&e.name!=="AbortError")toast("Sharing is not available. Download the PDF instead.")}el.disabled=false},
   print(){try{window.print()}catch(e){toast("Printing is not available here. Download the PDF and print it.")}},
   async export(){S.data.backup.lastDownload=new Date().toISOString();persist();await saveBlob(new Blob([JSON.stringify({exportedAt:new Date().toISOString(),app:"Aara",version:1,data:S.data},null,1)],{type:"application/json"}),`aara-backup-${S.data.profile.mill.replace(/\W+/g,"-").toLowerCase()}-${today()}.json`);if(S.tab==="more")render()},
 };
@@ -1641,6 +1667,20 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
     if(fd.pin1!==fd.pin2)return err("The new PINs do not match.");
     const salt=uid();a.salt=salt;a.hash=await hashPin(fd.pin1,salt);
     await Store.set("accounts",S.accounts);closeModal();toast("PIN changed");return}
+  if(kind==="synccfg"){
+    if(!fd.url||!fd.key)return err("Enter the project URL and anon key from your Supabase project settings.");
+    const dest=String(fd.dest||"").trim();
+    const destSend=/@/.test(dest)?dest:(digits(dest).length===10?"+91"+digits(dest):"");
+    if(!destSend)return err("Enter your email address, or a 10-digit mobile for an SMS code.");
+    try{await loadScript("sync.js");const A=window.AaraSync;if(!A)throw new Error("load");
+      A.saveConfig(fd.url,fd.key);await A.sendOtp(destSend);render();toast("Code sent to "+destSend)}
+    catch(e){err("Could not reach that project — check the URL and anon key, then try again.")}
+    return}
+  if(kind==="syncv"){
+    try{await loadScript("sync.js");await window.AaraSync.verify(fd.code);
+      toast("Connected — your data now syncs across devices.");location.reload()}
+    catch(e){err("That code did not work. Check it and try again.")}
+    return}
   if(kind==="person"){
     if(!fd.name)return err("Enter a name.");
     fd.phone=digits(fd.phone);

@@ -1,10 +1,23 @@
 {
   "name": "aara",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "Aara — offline-first sawmill management PWA for India. Single static page, no build step.",
+  "description": "Aara — offline-first sawmill management PWA for India. Single static page, no build step; optional Capacitor shell and Supabase sync.",
   "scripts": {
     "test": "node test/run.mjs",
-    "serve": "python3 -m http.server 8000"
+    "serve": "python3 -m http.server 8000",
+    "app:build": "node scripts/build-app.mjs",
+    "app:add": "npx cap add android && npx cap add ios",
+    "app:sync": "node scripts/build-app.mjs && npx cap sync",
+    "app:android": "npx cap open android",
+    "app:ios": "npx cap open ios"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/filesystem": "^7.1.5",
+    "@capacitor/ios": "^7.4.3",
+    "@capacitor/share": "^7.0.2"
   }
 }
