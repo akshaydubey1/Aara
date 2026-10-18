@@ -16,6 +16,11 @@
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 <title>Aara Sawmill Manager</title>
 <meta name="theme-color" content="#24563A">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Aara — Sawmill Manager for India">
+<meta property="og:description" content="People, auctions, timber stock and CFT estimates — works offline, installs to your home screen.">
+<meta property="og:url" content="https://akshaydubey1.github.io/Aara/">
+<meta property="og:image" content="https://akshaydubey1.github.io/Aara/icon-512.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Hind:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap">
 <style>
@@ -416,6 +421,7 @@ function render(){
   document.documentElement.lang=S.lang;
   document.documentElement.dir=S.lang==="ur"?"rtl":"ltr";
   if(document.body.dataset)document.body.dataset.tab=S.screen==="app"?S.tab:"";
+  document.title=S.screen==="app"?"Aara — "+(S.tab==="estimate"?(S.draft&&S.draft.saved?"Order":"Estimate"):t(S.tab)):"Aara Sawmill Manager";
   const app=$("#app");
   if(S.screen==="loading"){app.innerHTML=`<div style="min-height:60vh;display:grid;place-items:center"><div class="row"><div class="rings"></div><span class="muted">Loading…</span></div></div>`;return}
   if(S.screen==="auth"){app.innerHTML=viewAuth();return}

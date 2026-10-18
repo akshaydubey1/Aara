@@ -24,6 +24,8 @@ python3 -m http.server 8000
 
 Serve over `http://` or `https://` (not `file://`) so the service worker and offline mode work.
 
+Try the sample mill instantly with `http://localhost:8000/#demo` — or deep-link a tab: `#demo/stock`, `#demo/orders`, `#demo/estimate`.
+
 Run the test suite (no dependencies, DOM-shimmed):
 
 ```bash
