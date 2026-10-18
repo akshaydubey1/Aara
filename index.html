@@ -10,6 +10,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Aara">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="theme-color" content="#111612" media="(prefers-color-scheme: dark)">
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 <title>Aara Sawmill Manager</title>
 <meta name="theme-color" content="#24563A">
@@ -179,7 +182,7 @@ td.r,th.r{text-align:right}
 
 </head>
 <body>
-<div id="app" aria-live="polite"></div>
+<div id="app"></div>
 <div id="modal"></div>
 <div id="toast" hidden class="toast" role="status"></div>
 
@@ -279,7 +282,8 @@ const AUCDIR=[
 const NAVS=[["home","M3 11 12 3l9 8v10h-6v-6H9v6H3z"],["people","M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-3 0-6 1.5-6 4v2h12v-2c0-2.5-3-4-6-4Zm8 0c-.5 0-1 0-1.5.1 1.3.9 2.5 2.2 2.5 3.9v2h5v-2c0-2.5-3-4-6-4Z"],["auctions","m14 3 7 7-3 3-7-7zM4 20l7-7M10 7l7 7M2 22h10"],["stock","M3 7h18v4H3zM3 13h18v4H3zM6 7V5m12 2V5M6 17v2m12-2v2"],["orders","M7 3h10l2 3v15H5V6zM9 10h6M9 14h6M9 18h4"],["more","M5 12h.01M12 12h.01M19 12h.01"]];
 
 /* ============ state & storage ============ */
-const S={lang:"en",screen:"loading",authTab:"login",tab:"home",acct:null,data:null,accounts:{},peopleTab:"owner",q:"",stockTab:"mine",woodQ:"",woodCat:"",orderFilter:"open",draft:null,auctionState:"",busy:false};
+const VERSION="1.1";
+const S={lang:"en",screen:"loading",authTab:"login",tab:"home",acct:null,data:null,accounts:{},peopleTab:"owner",q:"",stockTab:"mine",woodQ:"",woodCat:"",orderFilter:"open",draft:null,auctionState:"",aDay:null,pendingImport:null};
 try{S.lang=localStorage.getItem("aara:lang")||"en"}catch(e){}
 
 const Store={
@@ -289,6 +293,7 @@ const Store={
 };
 let saveTimer=null;
 function persist(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(S.acct&&S.data)Store.set("mill_"+S.acct,S.data)},400)}
+function logMove(m){S.data.moves.push(m);if(S.data.moves.length>400)S.data.moves.splice(0,S.data.moves.length-400)}
 
 /* ============ helpers ============ */
 const $=s=>document.querySelector(s);
@@ -382,6 +387,7 @@ function render(){
   const app=$("#app");
   if(S.screen==="loading"){app.innerHTML=`<div style="min-height:60vh;display:grid;place-items:center"><div class="row"><div class="rings"></div><span class="muted">Loading…</span></div></div>`;return}
   if(S.screen==="auth"){app.innerHTML=viewAuth();return}
+  if(S.tab==="estimate"&&!S.draft)S.tab="orders";
   const views={home:viewHome,people:viewPeople,auctions:viewAuctions,stock:viewStock,orders:viewOrders,more:viewMore,estimate:viewEstimate};
   const navBtn=([k,d])=>`<button class="nav" data-act="tab" data-v="${k}" ${S.tab===k||(k==="orders"&&S.tab==="estimate")?'aria-current="page"':""}>${icon(d)}<span>${esc(t(k))}</span></button>`;
   app.innerHTML=`<div class="shell">
@@ -440,8 +446,10 @@ function viewHome(){
   const up=d.auctions.filter(a=>daysUntil(a.date)>=0&&!["lost","lifted"].includes(a.status)).sort((a,b)=>a.date.localeCompare(b.date));
   const low=lowStock();
   const hr=new Date().getHours();const greet=hr<12?"Good morning":hr<17?"Good afternoon":"Good evening";
+  const backupDue=!d.profile.demo&&(d.lastBackup?Date.now()-d.lastBackup>14*864e5:daysUntil(d.profile.createdAt||today())<-7);
   return `<div class="topbar"><div><p class="label">${fdate(today())}</p><h1>${greet}, ${esc(d.profile.owner.split(" ")[0])}</h1></div>
     <div class="row"><button class="btn primary" data-act="newOrder">+ ${t("newEstimate")}</button><button class="btn" data-act="addPerson" data-v="labour">+ ${t("labour")}</button></div></div>
+  ${backupDue?`<div class="banner warn"><b>Backup overdue.</b>&nbsp;Your mill data lives only in this browser. <button class="btn ghost sm" style="padding:0 4px;min-height:0" data-act="export">Export a copy</button> — it takes ten seconds.</div>`:""}
   <div class="kpis">
     <div class="card kpi"><p class="label">${t("stock")}</p><p class="v num">${fx(stockCft(),0)} <span style="font-size:15px">CFT</span></p><p class="s">Worth ${inr(stockValue())} at your selling rates</p></div>
     <div class="card kpi"><p class="label">Open ${t("orders")}</p><p class="v num">${open.length}</p><p class="s">${inr(openVal)} incl. GST</p></div>
@@ -468,7 +476,8 @@ function viewPeople(){
   const lab=d.people.filter(p=>p.type==="labour"&&p.active);
   const wd=d.settings.workDays;
   const bill=lab.reduce((a,p)=>a+(p.wageType==="daily"?(+p.wage||0)*wd:p.wageType==="monthly"?(+p.wage||0):0),0);
-  const month=today().slice(0,7);
+  const day=S.aDay&&S.aDay<=today()?S.aDay:today();
+  const month=day.slice(0,7);
   const daysIn=p=>Object.keys(p.present||{}).filter(k=>k.startsWith(month)&&p.present[k]).length;
   return `<div class="topbar"><div><p class="label">${esc(d.profile.mill)}</p><h1>${t("people")}</h1></div><button class="btn primary" data-act="addPerson" data-v="${type}">+ ${t("add")} ${t(type==="owner"?"owners":type==="coowner"?"coowners":"labour")}</button></div>
   <div class="row between"><div class="tabs" role="tablist">
@@ -477,12 +486,13 @@ function viewPeople(){
   ${type!=="labour"&&shareTotal!==100&&d.people.some(p=>p.type!=="labour")?`<div class="banner warn">Owner and co-owner shares add up to ${shareTotal}%. They should total 100%.</div>`:""}
   ${type==="labour"?`<div class="grid g3"><div class="card"><p class="label">Active workers</p><p class="kpi"><span class="v num">${lab.length}</span></p></div>
     <div class="card"><p class="label">${t("present")} today</p><p class="kpi"><span class="v num">${lab.filter(p=>p.present[today()]).length}</span></p></div>
-    <div class="card"><p class="label">Monthly wage bill (est.)</p><p class="kpi"><span class="v num">${inr(bill)}</span></p><p class="small muted">Daily wages × ${wd} days. Piece-rate not included.</p></div></div>`:""}
-  ${list.length?`<div class="tablewrap"><table><thead><tr><th>${t("name")}</th><th>${t("phone")}</th>${type==="labour"?`<th>${t("wage")}</th><th class="r">Days this month</th><th>${t("present")} today</th>`:`<th class="r">Share</th><th>Since</th>`}<th></th></tr></thead><tbody>
+    <div class="card"><p class="label">Monthly wage bill (est.)</p><p class="kpi"><span class="v num">${inr(bill)}</span></p><p class="small muted">Daily wages × ${wd} days. Piece-rate not included.</p></div></div>
+    <div class="row"><div style="width:170px"><input type="date" value="${day}" max="${today()}" data-act-change="aday" aria-label="Attendance date"></div><button class="btn sm" data-act="allPresent">Mark all ${t("present")}</button>${day!==today()?`<span class="pill p-warn">Marking for ${fdate(day)}</span>`:""}</div>`:""}
+  ${list.length?`<div class="tablewrap"><table><thead><tr><th>${t("name")}</th><th>${t("phone")}</th>${type==="labour"?`<th>${t("wage")}</th><th class="r">Days this month</th><th>${t("present")} ${day===today()?"today":fdate(day)}</th>`:`<th class="r">Share</th><th>Since</th>`}<th></th></tr></thead><tbody>
     ${list.map(p=>`<tr><td><div class="row" style="flex-wrap:nowrap"><div class="avatar">${esc(initials(p.name))}</div><div><b>${esc(p.name)}</b>${p.active?"":` <span class="pill p-neutral">Inactive</span>`}<div class="small muted">${esc(p.role||"")}</div></div></div></td>
       <td class="num">${esc(p.phone||"—")}</td>
       ${type==="labour"?`<td class="num">${p.wageType==="piece"?inr(p.wage)+"/CFT":p.wageType==="monthly"?inr(p.wage)+"/mo":inr(p.wage)+"/day"}</td><td class="r num">${daysIn(p)}</td>
-        <td><label class="check" style="align-items:center"><input type="checkbox" data-act-change="present" data-id="${p.id}" ${p.present[today()]?"checked":""} ${p.active?"":"disabled"}><span>${p.present[today()]?t("present"):"Absent"}</span></label></td>`
+        <td><label class="check" style="align-items:center"><input type="checkbox" data-act-change="present" data-id="${p.id}" ${(p.present||{})[day]?"checked":""} ${p.active?"":"disabled"}><span>${(p.present||{})[day]?t("present"):"Absent"}</span></label></td>`
       :`<td class="r num">${+p.share||0}%</td><td>${fdate(p.joined)}</td>`}
       <td class="r"><div class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-act="editPerson" data-id="${p.id}">${t("edit")}</button><button class="btn sm danger" data-act="askDel" data-kind="person" data-id="${p.id}">${t("remove")}</button></div></td></tr>`).join("")}
   </tbody></table></div>`:`<div class="empty">No ${type==="labour"?"workers":type==="owner"?"owners":"co-owners"} added yet.</div>`}
@@ -501,7 +511,7 @@ function personForm(p){
     <datalist id="roles">${["Head sawyer","Sawyer","Band-saw operator","Helper","Loader","Truck driver","Munshi (accounts)","Watchman","Log grader","Saw sharpener (filer)","Cleaner"].map(r=>`<option value="${r}">`).join("")}</datalist>
     ${lab?`<div class="grid g2"><label class="field"><span>Wage type</span>${sel("wageType",[["daily","Daily (dihadi)"],["monthly","Monthly salary"],["piece","Piece rate per CFT"]],p.wageType||"daily")}</label>${inp("wage",t("wage")+" (₹)",p.wage,"number",'min="0" step="1"')}</div>
       <div class="grid g2">${inp("esic","ESIC / UAN no.",p.esic,"text",'placeholder="Optional"')}${inp("aadhaar4","Aadhaar (last 4 digits only)",p.aadhaar4,"text",'inputmode="numeric" maxlength="4" pattern="\\d{4}" placeholder="Optional"')}</div>`
-    :`<div class="grid g2">${inp("share","Share in mill (%)",p.share,"number",'min="0" max="100" step="0.5"')}${inp("pan","PAN (for partnership records)",p.pan,"text",'maxlength="10" placeholder="Optional"')}</div>`}
+    :`<div class="grid g2">${inp("share","Share in mill (%)",p.share,"number",'min="0" max="100" step="0.5"')}${inp("pan","PAN (for partnership records)",p.pan,"text",'maxlength="10" pattern="[A-Za-z]{5}[0-9]{4}[A-Za-z]" title="10 characters, e.g. ABCDE1234F" placeholder="Optional"')}</div>`}
     <div class="grid g2">${inp("address","Address / village",p.address)}${inp("emergency","Emergency contact",p.emergency,"tel",'placeholder="Optional"')}</div>
     <label class="check"><input type="checkbox" name="active" id="f_active" ${p.active!==false?"checked":""}><span>Active</span></label>
     ${lab?`<label class="check"><input type="checkbox" name="consent" id="f_consent" ${p.id?"checked":""} required><span>This worker has agreed to their details being recorded for wages and attendance.</span></label>`:""}
@@ -633,7 +643,7 @@ function viewEstimate(){
     </div>
     <div class="card stack"><h3>${t("total")}</h3><div class="totals" id="tot"></div>
       <label class="field"><span>Status</span>${sel("ostatus",Object.entries(STATUS).map(([k,v])=>[k,v[0]]),o.status,'data-act-change="ostatus"')}</label>
-      <div class="row"><button class="btn primary" data-act="saveOrder">${t("save")}</button>${!o.deducted&&!job&&o.status==="quote"?`<button class="btn chalk" data-act="confirmOrder">Confirm & reduce stock</button>`:""}<button class="btn" data-act="copyQuote">Copy for WhatsApp</button><button class="btn" data-act="print">Print / PDF</button></div>
+      <div class="row"><button class="btn primary" data-act="saveOrder">${t("save")}</button>${!o.deducted&&!job&&o.status==="quote"?`<button class="btn chalk" data-act="confirmOrder">Confirm & reduce stock</button>`:""}<button class="btn" data-act="wa">WhatsApp</button><button class="btn" data-act="copyQuote">Copy quote</button><button class="btn" data-act="print">Print / PDF</button></div>
       <p class="small muted" id="stockNote"></p>
       <textarea id="copyBox" rows="8" hidden readonly></textarea>
     </div></div>`;
@@ -697,9 +707,12 @@ function viewMore(){
     <div class="row" style="justify-content:flex-end"><button class="btn primary" type="submit">${t("save")}</button></div></form></div>
   <div class="grid g3">
     <div class="card stack"><h3>${t("language")}</h3>${sel("lang2",LANGS,S.lang,'data-act-change="lang"')}<p class="small muted">Menus and labels follow your language. Wood names always show English and Hindi.</p></div>
-    <div class="card stack"><h3>Your data</h3><p class="small muted">Saved in this browser on this device. Export a backup regularly — it is the only copy.</p><button class="btn" data-act="export">Export backup (JSON)</button></div>
-    <div class="card stack"><h3>Account</h3><button class="btn" data-act="legal">${t("terms")}</button><button class="btn" data-act="logout">${t("logout")}</button><button class="btn danger" data-act="askDel" data-kind="account">Delete account & data</button></div>
-  </div>`;
+    <div class="card stack"><h3>Your data</h3><p class="small muted">Saved in this browser on this device. Export a backup regularly — it is the only copy.</p>
+      <div class="row"><button class="btn" data-act="export">Export backup (JSON)</button><button class="btn" data-act="importPick">Import backup</button></div>
+      <input type="file" id="f_import" accept=".json,application/json" hidden data-act-change="import">
+      <p class="small muted">${d.lastBackup?"Last backup "+fdate(fmtDate(new Date(d.lastBackup))):"No backup exported yet."} Moving to a new phone? Export here, import there.</p></div>
+    <div class="card stack"><h3>Account</h3>${S.acct!=="demo"?`<button class="btn" data-act="pin">Change PIN</button>`:""}<button class="btn" data-act="legal">${t("terms")}</button><button class="btn" data-act="logout">${t("logout")}</button><button class="btn danger" data-act="askDel" data-kind="account">Delete account & data</button></div>
+  </div><p class="small muted" style="text-align:center">Aara v${VERSION} · made for Indian sawmills</p>`;
 }
 
 function legalHTML(){return `<div class="stack"><div class="row between"><h2>${t("terms")}</h2><button class="btn icon" data-act="close" aria-label="Close">×</button></div>
@@ -730,11 +743,15 @@ function closeModal(){$("#modal").innerHTML=""}
 /* ============ actions ============ */
 async function loadAccounts(){S.accounts=(await Store.get("accounts"))||{}}
 async function enter(mobile,data){S.acct=mobile;S.data=migrate(data);S.screen="app";S.tab="home";try{sessionStorage.setItem("aara:session",mobile)}catch(e){}render()}
-function deductStock(o){o.items.forEach(it=>{const s=S.data.stock[it.wood];if(s){const c=lineCft(it);s.qty=Math.max(0,Math.round(((+s.qty||0)-c)*100)/100);S.data.moves.push({id:uid(),date:today(),wood:it.wood,delta:-c,note:"Order #"+o.no+(o.customer?" · "+o.customer:"")})}});o.deducted=true}
-function restoreStock(o){o.items.forEach(it=>{const s=S.data.stock[it.wood];if(s){const c=lineCft(it);s.qty=Math.round(((+s.qty||0)+c)*100)/100;S.data.moves.push({id:uid(),date:today(),wood:it.wood,delta:c,note:"Order #"+o.no+" removed — stock added back"})}})}
+function deductStock(o){const short=[];o.items.forEach(it=>{const s=S.data.stock[it.wood];if(s){const c=lineCft(it);if(c>+s.qty)short.push(woodName(it.wood));s.qty=Math.max(0,Math.round(((+s.qty||0)-c)*100)/100);logMove({id:uid(),date:today(),wood:it.wood,delta:-c,note:"Order #"+o.no+(o.customer?" · "+o.customer:"")})}});o.deducted=true;return short}
+function restoreStock(o){o.items.forEach(it=>{const s=S.data.stock[it.wood];if(s){const c=lineCft(it);s.qty=Math.round(((+s.qty||0)+c)*100)/100;logMove({id:uid(),date:today(),wood:it.wood,delta:c,note:"Order #"+o.no+" removed — stock added back"})}})}
+const cftByWood=o=>{const m={};o.items.forEach(it=>{m[it.wood]=(m[it.wood]||0)+lineCft(it)});return m};
+function adjustStock(prev,o){const a=cftByWood(prev),b=cftByWood(o);
+  new Set([...Object.keys(a),...Object.keys(b)]).forEach(w=>{const diff=(b[w]||0)-(a[w]||0);if(Math.abs(diff)<1e-9)return;const s=S.data.stock[w];if(!s)return;
+    s.qty=Math.max(0,Math.round((s.qty-diff)*100)/100);logMove({id:uid(),date:today(),wood:w,delta:-diff,note:"Order #"+o.no+" updated"})})}
 
 const ACT={
-  tab(el){S.tab=el.dataset.v;if(el.dataset.pt)S.peopleTab=el.dataset.pt;S.q="";render();window.scrollTo(0,0)},
+  tab(el){S.tab=el.dataset.v;if(el.dataset.pt)S.peopleTab=el.dataset.pt;S.q="";try{history.replaceState(null,"","#"+S.tab)}catch(e){}render();window.scrollTo(0,0)},
   authtab(el){S.authTab=el.dataset.v;render()},
   legal(){openModal(legalHTML(),true)},
   close(){closeModal()},
@@ -768,47 +785,67 @@ const ACT={
   ofilter(el){S.orderFilter=el.dataset.v;render()},
   newOrder(){S.draft={id:uid(),no:S.data.seq,date:today(),customer:"",phone:"",kind:"sale",items:[],transport:0,discount:0,advance:0,gstOn:true,status:"quote",deducted:false};S.draft.items=[blankItem("sale")];S.tab="estimate";render();window.scrollTo(0,0)},
   openOrder(el){S.draft=JSON.parse(JSON.stringify(S.data.orders.find(o=>o.id===el.dataset.id)));S.draft.saved=true;S.tab="estimate";render();window.scrollTo(0,0)},
-  addLine(){S.draft.items.push(blankItem(S.draft.kind));render()},
-  delLine(el){S.draft.items.splice(+el.dataset.i,1);render()},
-  useSug(el){S.draft.items[+el.dataset.i].rate=+el.dataset.v;const f=$("#f_rate_"+el.dataset.i);if(f)f.value=el.dataset.v;recalc()},
+  addLine(){S.draft.items.push(blankItem(S.draft.kind));S.draft.dirty=true;render()},
+  delLine(el){S.draft.items.splice(+el.dataset.i,1);S.draft.dirty=true;render()},
+  useSug(el){S.draft.items[+el.dataset.i].rate=+el.dataset.v;S.draft.dirty=true;const f=$("#f_rate_"+el.dataset.i);if(f)f.value=el.dataset.v;recalc()},
   saveOrder(){saveDraft();toast("Order #"+S.draft.no+" saved")},
   confirmOrder(){const o=S.draft;if(o.deducted)return;
-    deductStock(o);o.status="confirmed";saveDraft();render();toast("Order confirmed and stock reduced")},
+    const short=deductStock(o);o.status="confirmed";saveDraft();render();
+    toast(short.length?"Order confirmed — but "+short.join(", ")+" ran out of stock. Check Stock.":"Order confirmed and stock reduced")},
   async copyQuote(){const txt=quoteText(S.draft);const box=$("#copyBox");
     try{await navigator.clipboard.writeText(txt);box.hidden=true;box.value="";toast("Copied. Paste it in WhatsApp.")}catch(e){box.hidden=false;box.value=txt;box.focus();box.select();toast("Select all and copy the text below")}},
   print(){window.print()},
-  async export(){const blob=JSON.stringify({exportedAt:new Date().toISOString(),app:"Aara",version:1,data:S.data},null,2);
+  async wa(){const o=S.draft;let num=(o.phone||"").replace(/\D/g,"").replace(/^0+/,"");if(num.length===10)num="91"+num;
+    if(/^91\d{10}$/.test(num))window.open("https://wa.me/"+num+"?text="+encodeURIComponent(quoteText(o)),"_blank","noopener");
+    else{toast(o.phone?"That phone number does not look like a 10-digit Indian mobile — quote copied instead.":"No customer phone — quote copied. Add their number to send directly.");await ACT.copyQuote()}},
+  allPresent(){const day=S.aDay&&S.aDay<=today()?S.aDay:today();S.data.people.forEach(p=>{if(p.type==="labour"&&p.active)(p.present=p.present||{})[day]=true});persist();render();toast("All active workers marked present")},
+  pin(){openModal(`<form class="stack" data-form="pin"><h2>Change PIN</h2>${inp("old","Current PIN","","password",'required inputmode="numeric" maxlength="6" autocomplete="current-password"')}${inp("pin1","New PIN (4–6 digits)","","password",'required inputmode="numeric" maxlength="6" autocomplete="new-password"')}${inp("pin2","Repeat new PIN","","password",'required inputmode="numeric" maxlength="6" autocomplete="new-password"')}<p class="small" id="formErr" style="color:var(--bad)"></p><div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="close">${t("cancel")}</button><button class="btn primary" type="submit">${t("save")}</button></div></form>`)},
+  importPick(){const f=$("#f_import");if(f)f.click()},
+  doImport(){if(!S.pendingImport)return;S.data=migrate(S.pendingImport);S.pendingImport=null;persist();closeModal();render();toast("Backup restored")},
+  async export(){S.data.lastBackup=Date.now();persist();const blob=JSON.stringify({exportedAt:new Date().toISOString(),app:"Aara",version:1,data:S.data},null,2);
     try{const url=URL.createObjectURL(new Blob([blob],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download=`aara-${(S.data.profile.mill||"mill").replace(/\W+/g,"-").toLowerCase()}-${today()}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);toast("Backup downloaded");return}catch(e){}
     openModal(`<div class="stack"><h2>Backup</h2><p class="small muted">Copy this text and keep it somewhere safe.</p><textarea rows="12" readonly>${esc(blob)}</textarea><div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">Done</button></div></div>`,true)}
 };
 function saveDraft(){const o=S.draft;
   const i=S.data.orders.findIndex(x=>x.id===o.id);const prev=i>=0?S.data.orders[i]:null;
-  if(prev&&prev.deducted&&prev.kind==="sale"&&(o.kind==="job"||o.status==="cancelled")){restoreStock(prev);o.deducted=false}
+  if(prev&&prev.deducted&&prev.kind==="sale"){
+    if(o.kind==="job"||o.status==="cancelled"){restoreStock(prev);o.deducted=false}
+    else adjustStock(prev,o);
+  }
   else if(o.kind==="sale"&&!o.deducted&&!["quote","cancelled"].includes(o.status))deductStock(o);
-  const c=JSON.parse(JSON.stringify(o));delete c.saved;
+  const c=JSON.parse(JSON.stringify(o));delete c.saved;delete c.dirty;o.dirty=false;
   if(i>=0)S.data.orders[i]=c;else{S.data.orders.push(c);S.data.seq=Math.max(S.data.seq,o.no)+1}o.saved=true;persist()}
 
 const CHANGE={
   lang(el){S.lang=el.value;try{localStorage.setItem("aara:lang",S.lang)}catch(e){}render()},
-  present(el){const p=S.data.people.find(x=>x.id===el.dataset.id);p.present[today()]=el.checked;persist();render()},
+  present(el){const p=S.data.people.find(x=>x.id===el.dataset.id);(p.present=p.present||{})[S.aDay&&S.aDay<=today()?S.aDay:today()]=el.checked;persist();render()},
+  aday(el){S.aDay=el.value||null;render()},
+  import(el){const f=el.files&&el.files[0];el.value="";if(!f)return;const r=new FileReader();
+    r.onload=()=>{try{const j=JSON.parse(r.result);const d=j&&j.data&&typeof j.data==="object"?j.data:j;
+      if(!d||typeof d!=="object"||Array.isArray(d))throw 0;
+      S.pendingImport=d;const mill=d.profile&&d.profile.mill?d.profile.mill:"(unnamed mill)";
+      openModal(`<div class="stack"><h2>Restore backup?</h2><p>Backup for <b>${esc(mill)}</b>: ${(d.orders||[]).length} orders, ${(d.people||[]).length} people, ${Object.keys(d.stock||{}).length} woods in stock.</p><p class="muted small">This replaces ALL current data for this mill. Export a backup of today's data first if unsure.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">${t("cancel")}</button><button class="btn danger" data-act="doImport">Replace data</button></div></div>`)
+    }catch(e){toast("That file is not a valid Aara backup")}};
+    r.readAsText(f)},
   astatus(el){S.data.auctions.find(a=>a.id===el.dataset.id).status=el.value;persist();toast("Status updated")},
   aucst(el){S.auctionState=el.value;render()},
   woodCat(el){S.woodCat=el.value;render()},
-  okind(el){S.draft.kind=el.value;S.draft.gstOn=true;S.draft.items.forEach(it=>it.rate=costBasis(it.wood,el.value).suggested);render()},
-  lwood(el){const v=el.value;if(v.startsWith("__")){render();return}const it=S.draft.items[+el.dataset.i];it.wood=v;const r=costBasis(v,S.draft.kind).suggested;it.rate=it.mode==="rft"?Math.round(r*(+it.W||0)*(+it.T||0)/144):r;render()},
-  lmode(el){const it=S.draft.items[+el.dataset.i];it.mode=el.value;const r=costBasis(it.wood,S.draft.kind).suggested;it.rate=it.mode==="rft"?Math.round(r*(+it.W||0)*(+it.T||0)/144):r;render()},
-  lformula(el){S.draft.items[+el.dataset.i].formula=el.value;recalc()},
-  gstOn(el){S.draft.gstOn=el.checked;recalc()},
-  ostatus(el){S.draft.status=el.value;recalc()}
+  okind(el){S.draft.kind=el.value;S.draft.gstOn=true;S.draft.dirty=true;S.draft.items.forEach(it=>it.rate=costBasis(it.wood,el.value).suggested);render()},
+  lwood(el){const v=el.value;if(v.startsWith("__")){render();return}const it=S.draft.items[+el.dataset.i];it.wood=v;const r=costBasis(v,S.draft.kind).suggested;it.rate=it.mode==="rft"?Math.round(r*(+it.W||0)*(+it.T||0)/144):r;S.draft.dirty=true;render()},
+  lmode(el){const it=S.draft.items[+el.dataset.i];it.mode=el.value;const r=costBasis(it.wood,S.draft.kind).suggested;it.rate=it.mode==="rft"?Math.round(r*(+it.W||0)*(+it.T||0)/144):r;S.draft.dirty=true;render()},
+  lformula(el){S.draft.items[+el.dataset.i].formula=el.value;S.draft.dirty=true;recalc()},
+  gstOn(el){S.draft.gstOn=el.checked;S.draft.dirty=true;recalc()},
+  ostatus(el){S.draft.status=el.value;S.draft.dirty=true;recalc()}
 };
 
 document.addEventListener("click",e=>{const el=e.target.closest("[data-act]");if(!el)return;const f=ACT[el.dataset.act];if(f){if(el.tagName==="BUTTON"&&el.type!=="submit")e.preventDefault();f(el,e)}});
 document.addEventListener("change",e=>{const el=e.target.closest("[data-act-change]");if(el&&CHANGE[el.dataset.actChange])CHANGE[el.dataset.actChange](el)});
 document.addEventListener("input",e=>{const el=e.target;
   if(el.dataset.actInput){S[el.dataset.actInput]=el.value;const pos=el.selectionStart;render();const n=$("#"+el.id);if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return}
-  if(el.dataset.li!==undefined){if(!S.draft||!S.draft.items[+el.dataset.li])return;S.draft.items[+el.dataset.li][el.dataset.k]=el.value===""?"":+el.value;recalc();return}
-  if(el.dataset.of){if(!S.draft)return;S.draft[el.dataset.of]=el.type==="number"?(+el.value||0):el.value;recalc()}});
+  if(el.dataset.li!==undefined){if(!S.draft||!S.draft.items[+el.dataset.li])return;S.draft.items[+el.dataset.li][el.dataset.k]=el.value===""?"":+el.value;S.draft.dirty=true;recalc();return}
+  if(el.dataset.of){if(!S.draft)return;S.draft[el.dataset.of]=el.type==="number"?(+el.value||0):el.value;S.draft.dirty=true;recalc()}});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("#modal").innerHTML)closeModal()});
+window.addEventListener("beforeunload",e=>{if(S.draft&&S.draft.dirty){e.preventDefault();e.returnValue=""}});
 
 document.addEventListener("submit",async e=>{e.preventDefault();const form=e.target,kind=form.dataset.form;const fd=Object.fromEntries(new FormData(form));const d=S.data;
   const err=(m)=>{const x=form.querySelector("#authErr,#formErr");if(x)x.textContent=m};
@@ -829,8 +866,20 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
   if(kind==="login"){
     const mob=(fd.mobile||"").replace(/\D/g,"");await loadAccounts();const a=S.accounts[mob];
     if(!a)return err("No account found for this number. Sign up first, or try the sample mill.");
-    if(await hashPin(fd.pin||"",a.salt)!==a.hash)return err("Wrong PIN. Try again.");
+    const rec=(await Store.get("fail_"+mob))||{n:0,until:0};
+    if(Date.now()<rec.until)return err("Too many wrong PINs. Try again in "+Math.ceil((rec.until-Date.now())/6e4)+" min.");
+    if(await hashPin(fd.pin||"",a.salt)!==a.hash){rec.n++;
+      if(rec.n>=5){rec.until=Date.now()+5*6e4;rec.n=0}else rec.until=0;
+      await Store.set("fail_"+mob,rec);return err("Wrong PIN. Try again."+(rec.n?" "+(5-rec.n)+" tries left.":""))}
+    if(rec.n||rec.until)await Store.del("fail_"+mob);
     const m=await Store.get("mill_"+mob);if(!m)return err("Account found but mill data is missing on this device.");return enter(mob,m)}
+  if(kind==="pin"){await loadAccounts();const a=S.accounts[S.acct];
+    if(!a)return err("PIN can only be changed on your own account.");
+    if(await hashPin(fd.old||"",a.salt)!==a.hash)return err("Current PIN is wrong.");
+    if(!/^\d{4,6}$/.test(fd.pin1||""))return err("New PIN must be 4 to 6 digits.");
+    if(fd.pin1!==fd.pin2)return err("The new PINs do not match.");
+    const salt=uid();a.salt=salt;a.hash=await hashPin(fd.pin1,salt);
+    await Store.set("accounts",S.accounts);closeModal();toast("PIN changed");return}
   if(kind==="person"){
     if(!fd.name)return err("Enter a name.");
     if(fd.phone&&!/^\d{10}$/.test(fd.phone))return err("Phone should be 10 digits.");
@@ -842,11 +891,11 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
     if(!id)d.people.push(base);closeModal();persist();render();toast(t("save")+" ✓")}
   if(kind==="auction"){const id=form.dataset.id;const base=id?d.auctions.find(a=>a.id===id):{id:uid()};Object.assign(base,{...fd,emd:+fd.emd||0,link:safeUrl(fd.link)});if(!id)d.auctions.push(base);closeModal();persist();render();toast("Saved to your diary")}
   if(kind==="stock"){const id=form.dataset.id;const was=d.stock[id];d.stock[id]={form:fd.form,qty:+fd.qty||0,buy:+fd.buy||0,sell:+fd.sell||0,min:+fd.min||0};
-    if(!was&&+fd.qty)d.moves.push({id:uid(),date:today(),wood:id,delta:+fd.qty,note:"Opening stock"});
-    if(was&&+fd.qty!==+was.qty)d.moves.push({id:uid(),date:today(),wood:id,delta:+fd.qty-(+was.qty||0),note:"Stock count corrected"});
+    if(!was&&+fd.qty)logMove({id:uid(),date:today(),wood:id,delta:+fd.qty,note:"Opening stock"});
+    if(was&&+fd.qty!==+was.qty)logMove({id:uid(),date:today(),wood:id,delta:+fd.qty-(+was.qty||0),note:"Stock count corrected"});
     closeModal();S.stockTab="mine";persist();render();toast(woodName(id)+" saved")}
   if(kind==="move"){const id=form.dataset.id,q=+fd.qty||0;if(q<=0)return;const s=d.stock[id];const delta=form.dataset.dir==="in"?q:-Math.min(q,+s.qty||0);
-    s.qty=Math.round(((+s.qty||0)+delta)*100)/100;d.moves.push({id:uid(),date:fd.date||today(),wood:id,delta,note:fd.note||(delta>0?"Stock in":"Stock out")});closeModal();persist();render()}
+    s.qty=Math.round(((+s.qty||0)+delta)*100)/100;logMove({id:uid(),date:fd.date||today(),wood:id,delta,note:fd.note||(delta>0?"Stock in":"Stock out")});closeModal();persist();render()}
   if(kind==="customWood"){const id="c_"+uid();d.customWoods.push({id,en:fd.en.trim(),hn:fd.hn,uses:fd.uses,cat:"",lo:0,max:0});closeModal();persist();openModal(stockForm(id))}
   if(kind==="profile"){Object.assign(d.profile,{mill:fd.mill,owner:fd.owner,state:fd.state,district:fd.district,licence:fd.licence,licenceExp:fd.licenceExp,gstin:(fd.gstin||"").toUpperCase()});persist();render();toast("Profile saved")}
   if(kind==="pricing"){for(const k of ["wastage","sawing","labour","margin","gst","workDays"])d.settings[k]=+fd[k]||0;d.settings.gstMode=fd.gstMode;persist();render();toast("Pricing saved")}
@@ -858,7 +907,8 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
   if("serviceWorker" in navigator&&/^https?:/.test(location.protocol))navigator.serviceWorker.register("sw.js").catch(()=>{});
   await loadAccounts();
   let sess=null;try{sess=sessionStorage.getItem("aara:session")}catch(e){}
-  if(sess){const m=await Store.get("mill_"+sess);if(m){S.acct=sess;S.data=migrate(m);S.screen="app";render();return}}
+  if(sess){const m=await Store.get("mill_"+sess);if(m){S.acct=sess;S.data=migrate(m);S.screen="app";
+    const h=(location.hash||"").slice(1);if(["people","auctions","stock","orders","more"].includes(h))S.tab=h;render();return}}
   S.screen="auth";render();
 })();
 </script>
