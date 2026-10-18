@@ -23,8 +23,12 @@ const NULL_SEL = new Set(["#stkHelp", "#bsHelp", "#pricingEx", "#modal .modal"])
 const mkEl = () => ({
   innerHTML: "", textContent: "", hidden: true, value: "", files: null,
   className: "", disabled: false, checked: false, dataset: {}, style: {},
+  width: 0, height: 0,
   focus() {}, select() {}, appendChild() {}, remove() {}, click() {},
   setSelectionRange() {}, selectionStart: 0,
+  getContext: () => ({ fillRect() {}, drawImage() {}, fillStyle: "" }),
+  toDataURL: () => "data:image/jpeg;base64,x",
+  get firstElementChild() { return mkEl(); },
   querySelector: () => mkEl(), querySelectorAll: () => [], closest: () => null,
 });
 const store = {};
@@ -60,14 +64,16 @@ const serverRows = new Map();     // "mill|key" -> {mill_id,key,v,t}
 const serverMembers = new Map();  // "mill|uid" -> {mill_id,uid,role}
 const serverInvites = new Map();  // code -> {code,mill_id,role,used}
 const jres = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
+const net = { down: false, revoked: false };  // connection-state knobs
 const fetch = async (url, opts = {}) => {
+  if (net.down) throw new TypeError("fetch failed");
   const u = new URL(url);
   if (u.pathname === "/auth/v1/otp") return jres(200, {});
   if (u.pathname === "/auth/v1/verify") {
     const b = JSON.parse(opts.body);
     return b.token === "123456" ? jres(200, { access_token: "tok_u1", user: { id: "u1" } }) : jres(400, { error: "bad" });
   }
-  if ((opts.headers || {}).Authorization !== "Bearer tok_u1") return jres(401, {});
+  if (net.revoked || (opts.headers || {}).Authorization !== "Bearer tok_u1") return jres(401, {});
   const me = "u1", roleOf = m => (serverMembers.get(m + "|" + me) || {}).role;
   const eq = (u, p) => { const v = u.searchParams.get(p); return v && v.startsWith("eq.") ? v.slice(3) : null; };
   if (u.pathname === "/rest/v1/mill_members") {
@@ -128,7 +134,10 @@ const fetch = async (url, opts = {}) => {
   return jres(404, {});
 };
 class FormData { constructor(f) { return new Map(Object.entries(f._fd)); } }
-class FileReader { readAsText(f) { this.result = f._text; setTimeout(() => this.onload && this.onload(), 0); } }
+class FileReader {
+  readAsText(f) { this.result = f._text; setTimeout(() => this.onload && this.onload(), 0); }
+  readAsDataURL(f) { this.result = "data:application/octet-stream;base64," + Buffer.from(f._text || "").toString("base64"); setTimeout(() => this.onload && this.onload(), 0); }
+}
 const errBox = { v: "" };
 const errEl = { set textContent(v) { errBox.v = v; }, get textContent() { return errBox.v; } };
 const submit = (kind, fd, extra = {}) =>
@@ -412,20 +421,63 @@ const test = `;(async () => {
   serverRows.set("u1|att_" + S.acct + "_" + w2.id + "_2099-01-15", { mill_id: "u1", key: "att_" + S.acct + "_" + w2.id + "_2099-01-15", v: { v: "H" }, t: Date.now() + 999999 });
   await A.pullAll();
   ok("pulled attendance folds without clobbering", attVal(w1, "2099-01-15") === "P" && attVal(w2, "2099-01-15") === "H");
+
+  // ---- connection states ----
+  // offline write while configured: lands locally, syncs on reconnect
+  net.down = true;
+  await Store.set("offlinekey", { a: 1 });
+  ok("offline write lands locally only", !!localStorage.getItem("aara:offlinekey") && !serverRows.get("u1|offlinekey"));
+  const downBoot = await A.boot(Store);
+  ok("server-down boot falls back to device", downBoot === "device" && S.mode === "device" && !Store.db);
+  net.down = false;
+  const upBoot = await A.boot(Store);
+  ok("reconnect restores cloud + pushes offline write", upBoot === "cloud" && serverRows.get("u1|offlinekey") && serverRows.get("u1|offlinekey").v.a === 1);
+  // same-key conflict: newer remote wins
+  serverRows.set("u1|conflict", { mill_id: "u1", key: "conflict", v: { winner: "remote" }, t: Date.now() + 9999999 });
+  localStorage.setItem("aara:conflict", JSON.stringify({ winner: "local" }));
+  localStorage.setItem("aarat:conflict", "1");
+  await A.pullAll();
+  ok("newer remote wins same-key conflict", JSON.parse(localStorage.getItem("aara:conflict")).winner === "remote");
+  // revoked session: 401 clears session, degrades to device, keeps local data
+  net.revoked = true;
+  await A.pullAll().catch(() => {});
+  ok("401 clears session and keeps local data", !A.connected() && S.mode === "device" && !!localStorage.getItem("aara:conflict"));
+  net.revoked = false;
   // device fallback: broken server must not block the app
   A.disconnect();
   ok("disconnect returns to device mode", !A.connected() && S.mode === "device" && !Store.db && S.role === "owner");
+
+  // ---- native app (Capacitor) paths ----
+  const capCalls = { writes: [], shares: [] };
+  window.Capacitor = { isNativePlatform: () => true, Plugins: {
+    Filesystem: { writeFile: async o => { capCalls.writes.push(o); return { uri: "file:///d/" + o.path } } },
+    Share: { share: async o => { capCalls.shares.push(o) } } } };
+  await saveBlob({ _text: "backup bytes" }, "aara-backup.json");
+  ok("native save routes Filesystem -> Share", capCalls.writes.length === 1 && capCalls.writes[0].path === "aara-backup.json" &&
+    capCalls.writes[0].directory === "CACHE" && capCalls.writes[0].data.length > 4 && capCalls.shares[0] && capCalls.shares[0].url === "file:///d/aara-backup.json");
+  // native PDF share: stub the vendored libs so makePdf produces a blob
+  window.html2canvas = async () => ({ width: 794, height: 1123 });
+  window.jspdf = { jsPDF: class { constructor() { this.internal = { pageSize: { getWidth: () => 595, getHeight: () => 842 } } } addPage() {} addImage() {} output() { return { _text: "pdfbytes" } } } };
+  S.shareOrder = S.data.orders[0];
+  const writes0 = capCalls.writes.length;
+  await ACT.sharePdf({ disabled: false });
+  ok("native sharePdf saves + shares via Filesystem", capCalls.writes.length === writes0 + 1 && /estimate/i.test(capCalls.writes.at(-1).path));
+  delete window.Capacitor;
 })()`;
 
 const fn = new Function(
   "localStorage", "document", "window", "crypto", "navigator", "sessionStorage",
-  "location", "history", "FormData", "FileReader", "fetch", "ok", "submit", "opened", "el", "serverRows", "serverMembers", "serverInvites", "errBox",
+  "location", "history", "FormData", "FileReader", "fetch", "ok", "submit", "opened", "el", "serverRows", "serverMembers", "serverInvites", "errBox", "net",
   src + ";\n" + syncSrc + ";return " + test.slice(1)  // app + sync layer, then the test promise
 );
 
+// node lacks blob-object URLs — the web saveBlob path needs these to exist.
+URL.createObjectURL = URL.createObjectURL || (() => "blob:mock");
+URL.revokeObjectURL = URL.revokeObjectURL || (() => {});
+
 try {
   await fn(localStorage, document, window, webcrypto, navigator, sessionStorage,
-    location, history, FormData, FileReader, fetch, ok, submit, opened, el, serverRows, serverMembers, serverInvites, errBox);
+    location, history, FormData, FileReader, fetch, ok, submit, opened, el, serverRows, serverMembers, serverInvites, errBox, net);
 } catch (e) {
   console.error("HARNESS FAIL:", e);
   process.exit(1);
