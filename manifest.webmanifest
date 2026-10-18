@@ -1,0 +1,10 @@
+{
+  "name": "Aara Sawmill Manager",
+  "short_name": "Aara",
+  "description": "Sawmill management for India: people, auctions, timber stock and CFT estimates.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#F1F3EE",
+  "theme_color": "#24563A",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
