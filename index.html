@@ -381,7 +381,7 @@ const Store={db:null,uid:null,
   },
   ref(k){return this.db.collection("data/users/"+this.uid).doc(k)},
   async get(k){
-    if(this.db){try{const s=await this.ref(k).get();if(s.exists){const v=s.data().v;try{localStorage.setItem("aara:"+k,JSON.stringify(v))}catch(e){}return v}}catch(e){}}
+    if(this.db){try{const s=await this.ref(k).get();if(s.exists){const v=s.data().v;if(v===null){try{localStorage.removeItem("aara:"+k)}catch(e){}return null}try{localStorage.setItem("aara:"+k,JSON.stringify(v))}catch(e){}return v}}catch(e){}}
     try{const v=localStorage.getItem("aara:"+k);return v?JSON.parse(v):null}catch(e){return null}
   },
   async set(k,v){const t=Date.now();let ok=true;
@@ -390,8 +390,10 @@ const Store={db:null,uid:null,
     return ok
   },
   async del(k){
-    try{localStorage.removeItem("aara:"+k);localStorage.removeItem("aarat:"+k)}catch(e){}
-    if(this.db){try{await this.ref(k).delete()}catch(e){}}
+    // Keep the timestamp as a tombstone so the sync layer can propagate the
+    // delete; removing it would let a pull resurrect the key.
+    try{localStorage.removeItem("aara:"+k);localStorage.setItem("aarat:"+k,String(Date.now()))}catch(e){}
+    if(this.db){try{await this.ref(k).set({v:null,t:Date.now()})}catch(e){}}
   }
 };
 // Local write timestamps — used by the sync layer for last-write-wins merges.

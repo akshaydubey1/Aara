@@ -12,6 +12,7 @@ const html = readFileSync(join(root, "index.html"), "utf8");
 const m = html.match(/<script>([\s\S]*)<\/script>/);
 if (!m) { console.error("no <script> block found in index.html"); process.exit(1); }
 const src = m[1];
+const syncSrc = readFileSync(join(root, "sync.js"), "utf8");
 
 /* ---- minimal DOM/browser shims (enough to render every view) ---- */
 const handlers = {};
@@ -31,6 +32,8 @@ const localStorage = {
   getItem: k => store[k] ?? null,
   setItem: (k, v) => { store[k] = String(v); },
   removeItem: k => { delete store[k]; },
+  key: i => Object.keys(store)[i] ?? null,
+  get length() { return Object.keys(store).length; },
 };
 const document = {
   documentElement: {}, title: "", head: mkEl(), body: mkEl(), activeElement: null,
@@ -50,6 +53,33 @@ const navigator = {};
 const location = { protocol: "http:", origin: "http://localhost", hostname: "localhost", hash: "" };
 const window = { scrollTo() {}, addEventListener() {}, open: u => opened.push(u), print() {} };
 const history = { replaceState() {} };
+// Fake Supabase server: rows keyed "uid|key", one session "tok_u1" -> user u1.
+const serverRows = new Map();
+const jres = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
+const fetch = async (url, opts = {}) => {
+  const u = new URL(url);
+  if (u.pathname === "/auth/v1/otp") return jres(200, {});
+  if (u.pathname === "/auth/v1/verify") {
+    const b = JSON.parse(opts.body);
+    return b.token === "123456" ? jres(200, { access_token: "tok_u1", user: { id: "u1" } }) : jres(400, { error: "bad" });
+  }
+  if (u.pathname === "/rest/v1/mill_data") {
+    if ((opts.headers || {}).Authorization !== "Bearer tok_u1") return jres(401, {});
+    const keyEq = u.searchParams.get("key");
+    if (!opts.method || opts.method === "GET") {
+      let rows = [...serverRows.values()].filter(r => r.uid === "u1");
+      if (keyEq && keyEq.startsWith("eq.")) rows = rows.filter(r => r.key === keyEq.slice(3));
+      return jres(200, rows);
+    }
+    if (opts.method === "POST") {
+      const arr = Array.isArray(JSON.parse(opts.body)) ? JSON.parse(opts.body) : [JSON.parse(opts.body)];
+      arr.forEach(r => serverRows.set(r.uid + "|" + r.key, { uid: r.uid, key: r.key, v: r.v, t: r.t }));
+      return jres(200, []);
+    }
+    if (opts.method === "DELETE") { if (keyEq) serverRows.delete("u1|" + keyEq.slice(3)); return jres(200, []); }
+  }
+  return jres(404, {});
+};
 class FormData { constructor(f) { return new Map(Object.entries(f._fd)); } }
 class FileReader { readAsText(f) { this.result = f._text; setTimeout(() => this.onload && this.onload(), 0); } }
 let lastErr = "";
@@ -286,17 +316,45 @@ const test = `;(async () => {
   navigator.onLine = false; S.tab = "home"; render();
   ok("offline banner shows", document.querySelector("#app").innerHTML.includes("Offline"));
   delete navigator.onLine; render();
+
+  // ---- optional cloud sync (sync.js + fake Supabase server) ----
+  const A = window.AaraSync;
+  ok("sync module loaded", !!A && !A.configured() && !A.connected());
+  A.saveConfig("https://x.supabase.co", "anon-key");
+  ok("bad config rejected", (() => { try { A.saveConfig("http://evil", "k"); return false } catch (e) { return true } })());
+  await A.sendOtp("ash@test.com");
+  await A.verify("123456");
+  ok("sync connects after OTP", A.connected() && S.mode === "cloud");
+  // seed: server has newer mill doc; local has a newer key + a tombstone
+  serverRows.set("u1|mill_9876543210", { uid: "u1", key: "mill_9876543210", v: { profile: { mill: "Cloud Mill" }, people: [] }, t: Date.now() + 999999 });
+  localStorage.setItem("aara:mill_9876543210", JSON.stringify({ profile: { mill: "Local Mill" } }));
+  localStorage.setItem("aarat:mill_9876543210", "1000");
+  localStorage.setItem("aara:localonly", JSON.stringify({ x: 1 }));
+  localStorage.setItem("aarat:localonly", String(Date.now() + 86400000));
+  localStorage.removeItem("aara:gone");
+  localStorage.setItem("aarat:gone", String(Date.now() + 86400000));
+  const bootMode = await A.boot(Store);
+  ok("sync boot reports cloud", bootMode === "cloud" && !!Store.db);
+  ok("sync adopts newer remote", JSON.parse(localStorage.getItem("aara:mill_9876543210")).profile.mill === "Cloud Mill");
+  ok("sync pushes newer local", serverRows.get("u1|localonly") && serverRows.get("u1|localonly").v.x === 1);
+  ok("sync pushes tombstone", serverRows.get("u1|gone") && serverRows.get("u1|gone").v === null);
+  ok("sync never pushes config", !serverRows.get("u1|cloud") && !serverRows.get("u1|cloudSession"));
+  await Store.del("localonly");
+  ok("Store.del tombstones remotely", !localStorage.getItem("aara:localonly") && serverRows.get("u1|localonly").v === null);
+  // device fallback: broken server must not block the app
+  A.disconnect();
+  ok("disconnect returns to device mode", !A.connected() && S.mode === "device" && !Store.db);
 })()`;
 
 const fn = new Function(
   "localStorage", "document", "window", "crypto", "navigator", "sessionStorage",
-  "location", "history", "FormData", "FileReader", "ok", "submit", "opened", "el",
-  src + ";return " + test.slice(1)  // wrap: evaluate app then return the test promise
+  "location", "history", "FormData", "FileReader", "fetch", "ok", "submit", "opened", "el", "serverRows",
+  src + ";\n" + syncSrc + ";return " + test.slice(1)  // app + sync layer, then the test promise
 );
 
 try {
   await fn(localStorage, document, window, webcrypto, navigator, sessionStorage,
-    location, history, FormData, FileReader, ok, submit, opened, el);
+    location, history, FormData, FileReader, fetch, ok, submit, opened, el, serverRows);
 } catch (e) {
   console.error("HARNESS FAIL:", e);
   process.exit(1);

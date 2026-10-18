@@ -42,12 +42,18 @@ async function pullAll(){
   const rows=await api("/rest/v1/mill_data?select=key,v,t")||[];
   const remote={};rows.forEach(r=>{remote[r.key]=r});
   for(const k in remote){const r=remote[k];
-    if((+r.t||0)>store.localT(k)){try{localStorage.setItem("aara:"+k,JSON.stringify(r.v));localStorage.setItem("aarat:"+k,String(+r.t||0))}catch(e){}}}
-  const pushes=[];
+    if((+r.t||0)>store.localT(k)){try{
+      if(r.v===null)localStorage.removeItem("aara:"+k);
+      else localStorage.setItem("aara:"+k,JSON.stringify(r.v));
+      localStorage.setItem("aarat:"+k,String(+r.t||0))}catch(e){}}}
+  const pushes=[],keys=new Set();
   for(let i=0;i<localStorage.length;i++){const sk=localStorage.key(i);
-    if(!sk||!sk.startsWith("aara:"))continue;const k=sk.slice(5);if(NOSYNC.has(k))continue;
+    if(sk&&sk.startsWith("aara:"))keys.add(sk.slice(5));
+    else if(sk&&sk.startsWith("aarat:"))keys.add(sk.slice(6))}
+  for(const k of keys){if(NOSYNC.has(k))continue;
     const lt=store.localT(k),r=remote[k];
-    if(!r||lt>(+r.t||0)){try{pushes.push({uid:ses.user,key:k,v:JSON.parse(localStorage.getItem(sk)),t:lt||Date.now()})}catch(e){}}}
+    if(!r||lt>(+r.t||0)){const raw=localStorage.getItem("aara:"+k);
+      pushes.push({uid:ses.user,key:k,v:raw==null?null:JSON.parse(raw),t:lt||Date.now()})}}
   if(pushes.length)await api("/rest/v1/mill_data",{method:"POST",headers:{Prefer:"resolution=merge-duplicates"},body:JSON.stringify(pushes)});
 }
 
