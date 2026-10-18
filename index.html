@@ -400,8 +400,74 @@ const Store={db:null,uid:null,
 };
 // Local write timestamps — used by the sync layer for last-write-wins merges.
 Store.localT=k=>{try{return +(localStorage.getItem("aarat:"+k)||0)}catch(e){return 0}};
+/* The sync scope: which mill's document namespace this device writes to.
+   Solo/device mode = the account mobile; joined cloud mode = the mill id. */
+function scope(fb){return S.mode==="cloud"&&window.AaraSync&&window.AaraSync.millId()?window.AaraSync.millId():(S.acct||fb||"local")}
+
+/* Mill data is persisted as one record per sync key — orders, people,
+   customers, stock items, by-products, auctions, moves and month advances are
+   each their own record, with settings/profile/etc. under a `core_` doc and
+   an `idx_` manifest of ids. Two devices can then edit different records
+   without ever overwriting each other; conflicts resolve per record.
+   A legacy monolithic `mill_<acct>` doc is still read as a fallback. */
+Store.setMill=async function(sc,d){
+  const recs={["core_"+sc]:{profile:d.profile,settings:d.settings,backup:d.backup,wa:d.wa,customWoods:d.customWoods,seq:d.seq,demoV:d.demoV}};
+  const idx={};
+  const put=(pre,arr)=>{idx[pre]=[];(arr||[]).forEach(r=>{idx[pre].push(r.id);recs[pre+"_"+sc+"_"+r.id]=r})};
+  put("ord",d.orders);put("per",d.people);put("cus",d.customers);put("auc",d.auctions);put("mov",d.moves);
+  idx.stk=Object.keys(d.stock||{});idx.stk.forEach(k=>{recs["stk_"+sc+"_"+k]=d.stock[k]});
+  idx.byp=Object.keys(d.byp||{});idx.byp.forEach(k=>{recs["byp_"+sc+"_"+k]=d.byp[k]});
+  idx.adv=Object.keys(d.advances||{});idx.adv.forEach(k=>{recs["adv_"+sc+"_"+k]=d.advances[k]});
+  recs["idx_"+sc]=idx;
+  this._h=this._h||{};
+  // Diff against the LOCAL manifest — remote's idx may be newer and would
+  // generate false tombstones.
+  let prev=null;try{const v=localStorage.getItem("aara:idx_"+sc);prev=v?JSON.parse(v):null}catch(e){}
+  const batch=[];
+  for(const k in recs){const j=JSON.stringify(recs[k]);if(this._h[k]===j)continue;this._h[k]=j;batch.push([k,recs[k]])}
+  if(prev)for(const pre in idx)(prev[pre]||[]).forEach(id=>{if(!idx[pre].includes(id))batch.push([pre+"_"+sc+"_"+id,null])});
+  await this.setMany(batch);
+};
+Store.getMill=async function(sc){
+  const idx=await this.get("idx_"+sc);
+  if(!idx)return this.get("mill_"+sc);          // legacy monolith
+  const d=(await this.get("core_"+sc))||{};if(!d.profile)return null;
+  // Record ids come from the manifest UNION the local keyspace — a stale or
+  // hostile manifest can never hide a synced record.
+  const ids={};const addIds=(pre,arr)=>{(ids[pre]=ids[pre]||new Set());(arr||[]).forEach(id=>ids[pre].add(id))};
+  for(const pre in idx)addIds(pre,idx[pre]);
+  try{for(let i=0;i<localStorage.length;i++){const sk=localStorage.key(i);
+    if(!sk||!sk.startsWith("aara:"))continue;const k=sk.slice(5),p=k.match(/^(ord|per|cus|auc|mov|stk|byp|adv)_(.+)$/);
+    if(p){const ppre=p[1],rest=p[2];if(rest.startsWith(sc+"_"))addIds(ppre,[rest.slice(sc.length+1)])}}}catch(e){}
+  const grab=async pre=>{const out=[];for(const id of ids[pre]||[]){const r=await this.get(pre+"_"+sc+"_"+id);if(r!=null)out.push(r)}return out};
+  d.orders=await grab("ord");d.people=await grab("per");d.customers=await grab("cus");d.auctions=await grab("auc");d.moves=await grab("mov");
+  d.stock={};for(const k of ids.stk||[]){const r=await this.get("stk_"+sc+"_"+k);if(r!=null)d.stock[k]=r}
+  d.byp={};for(const k of ids.byp||[]){const r=await this.get("byp_"+sc+"_"+k);if(r!=null)d.byp[k]=r}
+  d.advances={};for(const k of ids.adv||[]){const r=await this.get("adv_"+sc+"_"+k);if(r!=null)d.advances[k]=r}
+  return d;
+};
+Store.delMill=async function(sc){
+  const idx=await this.get("idx_"+sc),ks=new Set(["idx_"+sc,"core_"+sc,"mill_"+sc]);
+  if(idx){for(const pre in idx)(idx[pre]||[]).forEach(id=>ks.add(pre+"_"+sc+"_"+id))}
+  // Union with the local keyspace — a record adopted remotely but missing
+  // from the manifest must still be tombstoned, or a pull would resurrect it.
+  try{for(let i=0;i<localStorage.length;i++){const sk=localStorage.key(i);
+    if(!sk||!sk.startsWith("aara:"))continue;const k=sk.slice(5),p=k.match(/^(ord|per|cus|auc|mov|stk|byp|adv|att)_(.+)$/);
+    if(p&&p[2].startsWith(sc+"_"))ks.add(k)}}catch(e){}
+  for(const k of ks)await this.del(k);
+};
+Store.setMany=async function(kvs){const t=Date.now();let ok=true;
+  for(const [k,v] of kvs){try{if(v===null)localStorage.removeItem("aara:"+k);else localStorage.setItem("aara:"+k,JSON.stringify(v));localStorage.setItem("aarat:"+k,String(t))}catch(e){ok=false}}
+  if(!ok)toast("Could not save — browser storage may be full. Export a backup from More.");
+  if(this.db&&kvs.length){try{
+    if(this.db.batch)await this.db.batch(kvs.map(([k,v])=>({key:k,v,t})));
+    else for(const [k,v] of kvs)await this.ref(k).set({v,t});
+  }catch(e){toast("Could not save online — saved on this device; will sync when reconnected.")}}
+  return ok};
 let saveTimer=null;
-function persist(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(S.acct&&S.data)Store.set("mill_"+S.acct,S.data)},400)}
+function persist(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(S.acct&&S.data)Store.setMill(scope(),S.data)},400)}
+// Re-read the assembled mill after a pull brings in remote records.
+window.AaraSyncAfterPull=async()=>{if(S.acct&&S.data){const m=await Store.getMill(scope());if(m){S.data=migrate(m);render()}}};
 
 /* ============ helpers ============ */
 const $=s=>document.querySelector(s);
@@ -520,7 +586,7 @@ function orderProfit(o){
    Every mark also writes its own sync key (att_<acct>_<person>_<date>) so two
    devices marking different workers never overwrite each other — sync.js
    folds them back into the mill doc after a pull. */
-function markAtt(p,ds,val){if(val)p.present[ds]=val;else delete p.present[ds];if(S.acct)Store.set("att_"+S.acct+"_"+p.id+"_"+ds,{v:val||null}).catch(()=>{})}
+function markAtt(p,ds,val){if(val)p.present[ds]=val;else delete p.present[ds];if(S.acct)Store.set("att_"+scope()+"_"+p.id+"_"+ds,{v:val||null}).catch(()=>{})}
 function attVal(p,ds){const v=(p.present||{})[ds];return v===true?"P":typeof v==="string"?v:""}
 function attUnits(v){return v==="P"?1:v==="H"?.5:0}
 function daysInMonth(m){const [y,mo]=m.split("-").map(Number);return new Date(y,mo,0).getDate()}
@@ -1172,12 +1238,12 @@ function legalHTML(){return `<div class="stack"><div class="row between"><h2>${t
 
 /* ============ backup, restore, import, export, tune-up ============ */
 const FREQS=[["0","Off"],["1","Every day"],["7","Every 7 days"],["15","Every 15 days"],["30","Every 30 days"]];
-const bkKey=()=>"bakidx_"+S.acct;
+const bkKey=()=>"bakidx_"+scope();
 const daysSince=ds=>ds?Math.floor((new Date(today()+"T00:00:00")-new Date(ds.slice(0,10)+"T00:00:00"))/864e5):9999;
 function dataCounts(d){return{people:(d.people||[]).length,labour:(d.people||[]).filter(p=>p.type==="labour").length,orders:(d.orders||[]).length,woods:Object.keys(d.stock||{}).length,auctions:(d.auctions||[]).length}}
 async function listBackups(){return (await Store.get(bkKey()))||[]}
 async function makeBackup(reason){
-  const idx=await listBackups();const id="bak_"+S.acct+"_"+Date.now();const snap=JSON.parse(JSON.stringify(S.data));
+  const idx=await listBackups();const id="bak_"+scope()+"_"+Date.now();const snap=JSON.parse(JSON.stringify(S.data));
   if(!await Store.set(id,snap)){toast("Backup failed: not enough storage. Download a backup file instead.");return null}
   idx.unshift({id,at:new Date().toISOString(),reason,size:JSON.stringify(snap).length,counts:dataCounts(snap)});
   const drop=idx.splice(Math.max(1,+S.data.backup.keep||10));for(const m of drop)await Store.del(m.id);
@@ -1432,7 +1498,7 @@ const ACT={
   legal(){openModal(legalHTML(),true)},
   close(){closeModal()},
   scrim(el,e){if(e.target===el)tryCloseModal()},
-  async demo(){const st=await Store.get("mill_demo");await enter("demo",st&&st.demoV===7?st:demoMill())},
+  async demo(){const st=await Store.getMill("demo");await enter("demo",st&&st.demoV===7?st:demoMill())},
   pin(){openModal(`<form class="stack" data-form="pin"><h2>Change PIN</h2>${inp("old","Current PIN","","password",'required inputmode="numeric" maxlength="6" autocomplete="current-password"')}${inp("pin1","New PIN (4–6 digits)","","password",'required inputmode="numeric" maxlength="6" autocomplete="new-password"')}${inp("pin2","Repeat new PIN","","password",'required inputmode="numeric" maxlength="6" autocomplete="new-password"')}<p class="small" id="formErr" style="color:var(--bad)"></p><div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="close">${t("cancel")}</button><button class="btn primary" type="submit">${t("save")}</button></div></form>`)},
   logout(){S.acct=null;S.data=null;S.screen="auth";S.authTab="login";try{sessionStorage.removeItem("aara:session")}catch(e){}render()},
   att(el){const p=S.data.people.find(x=>x.id===el.dataset.id);const ds=el.dataset.d;const order=["","P","H","A","L"];const nx=order[(order.indexOf(attVal(p,ds))+1)%order.length];
@@ -1471,7 +1537,7 @@ const ACT={
     if(k==="order"){const o=d.orders.find(x=>x.id===id);if(o&&o.deducted&&o.kind==="sale")restoreStock(o);d.orders=d.orders.filter(x=>x.id!==id)}
     if(k==="customer"){d.customers=d.customers.filter(c=>c.id!==id);d.orders.forEach(o=>{if(o.custId===id)o.custId=null})}
     closeModal();
-    if(k==="account"){if(S.mode==="cloud"&&S.role!=="owner"){toast("Only the owner can delete the mill.");return}await Store.del("mill_"+S.acct);if(S.acct!=="demo"){delete S.accounts[S.acct];await Store.set("accounts",S.accounts)}ACT.logout();toast("Account deleted");return}
+    if(k==="account"){if(S.mode==="cloud"&&S.role!=="owner"){toast("Only the owner can delete the mill.");return}await Store.delMill(scope());if(S.acct!=="demo"){delete S.accounts[S.acct];await Store.set("accounts",S.accounts)}ACT.logout();toast("Account deleted");return}
     persist();render();toast("Removed")},
   ofilter(el){S.orderFilter=el.dataset.v;render()},
   newOrder(){S.draft={id:uid(),no:S.data.seq,date:today(),customer:"",phone:"",kind:"sale",items:[],transport:0,discount:0,advance:0,gstOn:true,status:"quote",deducted:false};S.draft.items=[blankItem("sale")];S.tab="estimate";render();window.scrollTo(0,0)},
@@ -1667,7 +1733,7 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
     await Store.set("accounts",S.accounts);
     const m=newMill({mill:fd.mill.trim(),owner:fd.owner.trim(),mobile:mob,state:fd.state,district:fd.district,licence:fd.licence,gstin:(fd.gstin||"").toUpperCase()});
     m.people.push({id:uid(),type:"owner",name:fd.owner.trim(),role:"Owner",phone:mob,share:100,active:true,joined:today(),present:{}});
-    await Store.set("mill_"+mob,m);toast("Account created");return enter(mob,m)}
+    await Store.setMill(scope(mob),m);toast("Account created");return enter(mob,m)}
   if(kind==="login"){
     const mob=digits(fd.mobile);await loadAccounts();const a=S.accounts[mob];
     if(!a)return err("No account found for this number. Sign up first, or try the sample mill.");
@@ -1677,7 +1743,7 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
       if(rec.n>=5){rec.until=Date.now()+5*6e4;rec.n=0}else rec.until=0;
       await Store.set("fail_"+mob,rec);return err("Wrong PIN. Try again."+(rec.n?" "+(5-rec.n)+" tries left.":""))}
     if(rec.n||rec.until)await Store.del("fail_"+mob);
-    const m=await Store.get("mill_"+mob);if(!m)return err("Account found but mill data is missing on this device.");return enter(mob,m)}
+    const m=await Store.getMill(scope(mob));if(!m)return err("Account found but mill data is missing on this device.");return enter(mob,m)}
   if(kind==="pin"){await loadAccounts();const a=S.accounts[S.acct];
     if(!a)return err("PIN can only be changed on your own account.");
     if(await hashPin(fd.old||"",a.salt)!==a.hash)return err("Current PIN is wrong.");
@@ -1767,11 +1833,11 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
   await Store.init();
   await loadAccounts();
   let sess=null;try{sess=sessionStorage.getItem("aara:session")}catch(e){}
-  if(sess){const m=await Store.get("mill_"+sess);if(m){S.acct=sess;S.data=migrate(m);S.screen="app";
+  if(sess){const m=await Store.getMill(scope(sess));if(m){S.acct=sess;S.data=migrate(m);S.screen="app";
     const h=(location.hash||"").slice(1);if(["people","auctions","stock","orders","more"].includes(h))S.tab=h;render();autoBackup().catch(()=>{});return}}
   const h0=(location.hash||"").slice(1);
   if(h0==="demo"||h0.startsWith("demo/")){
-    const st=await Store.get("mill_demo");await enter("demo",st&&st.demoV===7?st:demoMill());
+    const st=await Store.getMill("demo");await enter("demo",st&&st.demoV===7?st:demoMill());
     const sub=h0.split("/")[1];
     if(sub==="estimate"){ACT.newOrder();return}
     if(sub==="share"){const o=S.data.orders[0];if(o){S.draft=JSON.parse(JSON.stringify(o));S.draft.saved=true;S.tab="estimate";render();openShare(S.draft)}return}

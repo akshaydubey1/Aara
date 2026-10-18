@@ -58,21 +58,32 @@ The first person to connect a mill is its **owner**. To add someone:
 | **Partner** | Everything except member management and deleting the mill |
 | **Munshi** | Enter orders, customers, payments, attendance, stock — cannot change settings or delete records |
 
-Mill membership is enforced by row-level security on the server; the finer
-settings/delete limits are enforced in the app as well.
+Mill membership is enforced by row-level security on the server, and the
+`mill_data_guard` trigger enforces munshi limits there too — a munshi cannot
+change mill settings or people, nor delete records, even with a hand-built
+client. The app hides those buttons as well, but the database is the wall.
 
 ## What syncs — and what does not
 
-- Mill data, backups index, saved backups: synced per key, newest wins.
+- Orders, people, customers, stock, by-products, auctions, stock moves and
+  advances each sync as their own record — two devices editing *different*
+  records never overwrite each other. Settings/profile sync under `core_`;
+  attendance marks travel per worker per day.
 - Deletes propagate via tombstones — removing on one device removes everywhere.
-- Your sign-in session and project config: never leave the device.
-- The PIN lock stays per-device. Cloud sign-in is by email/SMS code.
+- Backups index and saved backups: synced per key, newest wins.
+- Your sign-in session, PIN hashes, the `accounts` list and project config:
+  never leave the device. The PIN lock stays per-device.
+- Joining a mill wipes the joiner's local mill records first and adopts the
+  mill's cloud data — a new member can never overwrite the owner's data.
+- The server stamps every write with its own clock, so a phone with a wrong
+  clock cannot win conflicts; sessions renew automatically (no re-login
+  every hour).
 
 ## Honest limits
 
-- Last-write-wins per key. Two devices editing the *same* order at the same
-  time while offline → the later sync wins that key. Fine for a small mill,
-  not a multi-branch system.
+- Conflicts resolve per record, newest-server-write wins. Two devices editing
+  the *same* record while offline → the later sync wins it. Fine for a small
+  mill, not a multi-branch system.
 - Free-tier Supabase projects pause after about a week without activity —
   fine for building and testing; move to a paid plan before real mills
   depend on it.

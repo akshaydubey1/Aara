@@ -3,7 +3,8 @@
    The app is deliberately a thin native shell around the same PWA:
    index.html detects window.Capacitor and routes file saves/shares
    through the Filesystem and Share plugins instead of blob downloads. */
-import {cpSync, mkdirSync, rmSync, existsSync} from "node:fs";
+import {cpSync, mkdirSync, rmSync, readFileSync, writeFileSync} from "node:fs";
+import {createHash} from "node:crypto";
 import {join, dirname} from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -21,6 +22,16 @@ mkdirSync(www, {recursive: true});
 
 for (const f of FILES) cpSync(join(root, f), join(www, f));
 cpSync(join(root, "vendor"), join(www, "vendor"), {recursive: true});
+
+// Stamp the built service worker with a content-derived cache name, so every
+// build evicts old cached assets automatically (never stale JS in the app).
+const hash = createHash("sha1")
+  .update(readFileSync(join(www, "index.html")))
+  .update(readFileSync(join(www, "sync.js")))
+  .update(readFileSync(join(www, "sw.js")))
+  .digest("hex").slice(0, 10);
+const swPath = join(www, "sw.js");
+writeFileSync(swPath, readFileSync(swPath, "utf8").replace(/const CACHE="[^"]+"/, `const CACHE="aara-${hash}"`));
 
 // The service worker only makes sense on the web; on a native shell the
 // Capacitor runtime serves the bundle itself. Keep the file (harmless) but

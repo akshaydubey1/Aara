@@ -61,12 +61,16 @@ create policy "self-create own mill" on public.mill_members
   for insert to authenticated
   with check (uid = auth.uid()::text and mill_id = auth.uid()::text and role = 'owner');
 
--- Members can leave; the owner can remove anyone.
+-- A member can leave unless they are an owner (a mill always keeps its
+-- owner); the owner can remove anyone else.
 create policy "leave or owner removes" on public.mill_members
   for delete to authenticated
-  using (uid = auth.uid()::text or public.my_mill_role(mill_id) = 'owner');
+  using ((uid = auth.uid()::text and role <> 'owner')
+         or (uid <> auth.uid()::text and public.my_mill_role(mill_id) = 'owner'));
 
--- Mill data: every member reads and writes; only owner/partner delete.
+-- Mill data: every member reads and writes; only owner/partner run real
+-- deletes. (The app deletes via null-value tombstones — enforced in the
+-- mill_data_guard trigger below, which is what actually gates munshis.)
 create policy "members read" on public.mill_data
   for select to authenticated using (public.is_mill_member(mill_id));
 create policy "members write" on public.mill_data
@@ -76,26 +80,68 @@ create policy "members update" on public.mill_data
 create policy "owner and partner delete" on public.mill_data
   for delete to authenticated using (public.my_mill_role(mill_id) in ('owner','partner'));
 
+-- Write guard: the server stamps every write with its own clock (phone
+-- clocks cannot skew last-write-wins), and a munshi cannot tombstone
+-- anything except their attendance marks, nor write mill settings (core_)
+-- or people (per_) records — even with a hand-rolled client.
+create or replace function public.mill_data_guard()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.t := (extract(epoch from clock_timestamp()) * 1000)::bigint;
+  if public.my_mill_role(new.mill_id) = 'munshi' then
+    if new.v is null and new.key not like 'att\_%' escape '\' then
+      raise exception 'munshi cannot delete records';
+    end if;
+    if new.v is not null and (new.key like 'core\_%' escape '\'
+        or new.key like 'per\_%' escape '\' or new.key = 'accounts') then
+      raise exception 'munshi cannot change this record';
+    end if;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists mill_data_guard on public.mill_data;
+create trigger mill_data_guard
+  before insert or update on public.mill_data
+  for each row execute function public.mill_data_guard();
+
 -- Invites: only the owner sees and creates them.
 create policy "owner manages invites" on public.mill_invites
   for all to authenticated
   using (public.my_mill_role(mill_id) = 'owner')
   with check (public.my_mill_role(mill_id) = 'owner');
 
--- Join a mill with a single-use code. Runs as definer so it can write the
--- membership and consume the invite atomically.
+-- Failed join attempts — written only by join_mill (definer); no client
+-- access. Caps code guessing at 10 tries per user per hour.
+create table if not exists public.mill_join_attempts (
+  uid text not null,
+  at timestamptz not null default now()
+);
+alter table public.mill_join_attempts enable row level security;
+
+-- Join a mill with a single-use code. The UPDATE ... RETURNING makes
+-- redemption atomic: two simultaneous joins cannot both consume one code.
+-- Runs as definer so it can write the membership row; existing members
+-- keep their role (an owner can never demote themselves by redeeming).
 create or replace function public.join_mill(p_code text)
 returns text language plpgsql security definer set search_path = public as $$
 declare r record;
 begin
   if auth.uid() is null then raise exception 'not signed in'; end if;
-  select * into r from public.mill_invites
-    where code = p_code and used_at is null and expires > now();
-  if not found then raise exception 'invalid or expired invite code'; end if;
+  if (select count(*) from public.mill_join_attempts
+      where uid = auth.uid()::text and at > now() - interval '1 hour') >= 10 then
+    raise exception 'too many attempts — try again later';
+  end if;
+  update public.mill_invites set used_at = now()
+    where code = p_code and used_at is null and expires > now()
+    returning mill_id, role into r;
+  if not found then
+    insert into public.mill_join_attempts(uid) values (auth.uid()::text);
+    raise exception 'invalid or expired invite code';
+  end if;
   insert into public.mill_members(mill_id, uid, role)
     values (r.mill_id, auth.uid()::text, r.role)
-    on conflict (mill_id, uid) do update set role = excluded.role;
-  update public.mill_invites set used_at = now() where code = p_code;
+    on conflict (mill_id, uid) do nothing;
   return r.mill_id;
 end $$;
 

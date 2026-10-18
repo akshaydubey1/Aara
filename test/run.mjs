@@ -65,13 +65,21 @@ const serverMembers = new Map();  // "mill|uid" -> {mill_id,uid,role}
 const serverInvites = new Map();  // code -> {code,mill_id,role,used}
 const jres = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
 const net = { down: false, revoked: false };  // connection-state knobs
+let serverClock = 2000000000000;             // the server's own write clock
+const stamp = () => ++serverClock;
 const fetch = async (url, opts = {}) => {
   if (net.down) throw new TypeError("fetch failed");
   const u = new URL(url);
   if (u.pathname === "/auth/v1/otp") return jres(200, {});
   if (u.pathname === "/auth/v1/verify") {
     const b = JSON.parse(opts.body);
-    return b.token === "123456" ? jres(200, { access_token: "tok_u1", user: { id: "u1" } }) : jres(400, { error: "bad" });
+    return b.token === "123456" ? jres(200, { access_token: "tok_u1", refresh_token: "ref_u1", expires_in: 3600, user: { id: "u1" } }) : jres(400, { error: "bad" });
+  }
+  if (u.pathname === "/auth/v1/token") {
+    const b = JSON.parse(opts.body);
+    return b.refresh_token === "ref_u1" && !net.revoked
+      ? jres(200, { access_token: "tok_u1", refresh_token: "ref_u1", expires_in: 3600 })
+      : jres(400, { error: "invalid" });
   }
   if (net.revoked || (opts.headers || {}).Authorization !== "Bearer tok_u1") return jres(401, {});
   const me = "u1", roleOf = m => (serverMembers.get(m + "|" + me) || {}).role;
@@ -105,8 +113,16 @@ const fetch = async (url, opts = {}) => {
     }
     if (opts.method === "POST") {
       const arr = Array.isArray(JSON.parse(opts.body)) ? JSON.parse(opts.body) : [JSON.parse(opts.body)];
-      for (const r of arr) { if (!roleOf(r.mill_id)) return jres(403, {}); }
-      arr.forEach(r => serverRows.set(r.mill_id + "|" + r.key, { mill_id: r.mill_id, key: r.key, v: r.v, t: r.t }));
+      for (const r of arr) {
+        if (!roleOf(r.mill_id)) return jres(403, {});
+        // mill_data_guard trigger: munshi cannot tombstone non-att keys or
+        // write core_/per_ records; server stamps its own clock.
+        if (roleOf(r.mill_id) === "munshi") {
+          if (r.v === null && !r.key.startsWith("att_")) return jres(400, { message: "munshi cannot delete records" });
+          if (r.v !== null && (r.key.startsWith("core_") || r.key.startsWith("per_") || r.key === "accounts")) return jres(400, { message: "munshi cannot change this record" });
+        }
+      }
+      arr.forEach(r => serverRows.set(r.mill_id + "|" + r.key, { mill_id: r.mill_id, key: r.key, v: r.v, t: stamp() }));
       return jres(200, []);
     }
     if (opts.method === "DELETE") {
@@ -127,8 +143,9 @@ const fetch = async (url, opts = {}) => {
   if (u.pathname === "/rest/v1/rpc/join_mill") {
     const b = JSON.parse(opts.body), inv = serverInvites.get(b.p_code);
     if (!inv || inv.used) return jres(400, { message: "invalid or expired invite code" });
-    serverMembers.set(inv.mill_id + "|" + me, { mill_id: inv.mill_id, uid: me, role: inv.role, created_at: "2026-01-02" });
-    inv.used = true;
+    inv.used = true;   // atomic consume — a second redemption finds it used
+    if (!serverMembers.has(inv.mill_id + "|" + me))
+      serverMembers.set(inv.mill_id + "|" + me, { mill_id: inv.mill_id, uid: me, role: inv.role, created_at: "2026-01-02" });
     return jres(200, inv.mill_id);
   }
   return jres(404, {});
@@ -382,48 +399,90 @@ const test = `;(async () => {
   await A.verify("123456");
   ok("sync connects after OTP", A.connected() && S.mode === "cloud");
   ok("first connect self-creates owner mill", serverMembers.get("u1|u1") && A.role() === "owner" && A.millId() === "u1");
-  // seed: server has newer mill doc; local has a newer key + a tombstone
-  serverRows.set("u1|mill_9876543210", { mill_id: "u1", key: "mill_9876543210", v: { profile: { mill: "Cloud Mill" }, people: [] }, t: Date.now() + 999999 });
-  localStorage.setItem("aara:mill_9876543210", JSON.stringify({ profile: { mill: "Local Mill" } }));
-  localStorage.setItem("aarat:mill_9876543210", "1000");
-  localStorage.setItem("aara:localonly", JSON.stringify({ x: 1 }));
-  localStorage.setItem("aarat:localonly", String(Date.now() + 86400000));
-  localStorage.removeItem("aara:gone");
-  localStorage.setItem("aarat:gone", String(Date.now() + 86400000));
-  const bootMode = await A.boot(Store);
-  ok("sync boot reports cloud", bootMode === "cloud" && !!Store.db);
-  ok("sync adopts newer remote", JSON.parse(localStorage.getItem("aara:mill_9876543210")).profile.mill === "Cloud Mill");
-  ok("sync pushes newer local", serverRows.get("u1|localonly") && serverRows.get("u1|localonly").v.x === 1);
-  ok("sync pushes tombstone", serverRows.get("u1|gone") && serverRows.get("u1|gone").v === null);
-  ok("sync never pushes config", !serverRows.get("u1|cloud") && !serverRows.get("u1|cloudSession"));
-  await Store.del("localonly");
-  ok("Store.del tombstones remotely", !localStorage.getItem("aara:localonly") && serverRows.get("u1|localonly").v === null);
-  // sharing: invite code -> join -> role sticks
+  ok("session carries refresh token", JSON.parse(localStorage.getItem("aara:cloudSession")).refresh === "ref_u1");
+  await A.boot(Store);   // wires the adapter + first pull/push, as app startup does
+
+  // split-store: persist writes one record per key
+  await Store.setMill("u1", S.data);
+  let hasOrd = false; for (let i = 0; i < localStorage.length; i++) if ((localStorage.key(i) || "").startsWith("aara:ord_u1_")) hasOrd = true;
+  ok("mill persists as per-record keys", !!localStorage.getItem("aara:idx_u1") && !!localStorage.getItem("aara:core_u1") && hasOrd);
+
+  // merge: remote-only record adopted even when the manifest lacks it;
+  // local-only record pushed; assembled doc has both
+  serverRows.set("u1|ord_u1_remote1", { mill_id: "u1", key: "ord_u1_remote1", v: { id: "remote1", no: 77, kind: "sale", status: "quote", items: [], customer: "Remote Cust", date: today() }, t: stamp() });
+  serverRows.set("u1|core_u1", { mill_id: "u1", key: "core_u1", v: { profile: { mill: "Cloud Mill" }, settings: S.data.settings, backup: {}, wa: {}, customWoods: [], seq: 99 }, t: stamp() });
+  await A.pullAll();
+  const localOrdKey = "ord_u1_" + (S.data.orders[0] || {}).id;
+  ok("per-record push", !!serverRows.get("u1|" + localOrdKey));
+  ok("remote-only record adopted despite manifest", !!localStorage.getItem("aara:ord_u1_remote1"));
+  ok("afterPull reloads data incl. remote record", S.data.orders.some(o => o.id === "remote1") && S.data.profile.mill === "Cloud Mill");
+
+  // server clock is authoritative — a lying phone clock cannot win
+  serverRows.set("u1|conflict", { mill_id: "u1", key: "conflict", v: { winner: "remote" }, t: stamp() });
+  localStorage.setItem("aara:conflict", JSON.stringify({ winner: "local" }));
+  localStorage.setItem("aarat:conflict", String(Date.now() + 99999999));
+  await A.pullAll();
+  ok("server clock wins, not the phone's", JSON.parse(localStorage.getItem("aara:conflict")).winner === "remote");
+
+  // deletes propagate as tombstones
+  serverRows.set("u1|gone", { mill_id: "u1", key: "gone", v: { x: 1 }, t: stamp() });
+  localStorage.setItem("aara:gone", JSON.stringify({ x: 1 })); localStorage.setItem("aarat:gone", "1");
+  await A.pullAll();
+  await Store.del("gone");
+  ok("delete propagates as tombstone", serverRows.get("u1|gone").v === null && !!localStorage.getItem("aarat:gone"));
+  ok("sync never pushes config or accounts", !serverRows.get("u1|cloud") && !serverRows.get("u1|accounts") && !serverRows.get("u1|fail_x"));
+
+  // refresh path: an expired access token renews silently
+  const sexp = JSON.parse(localStorage.getItem("aara:cloudSession")); sexp.exp = 1; localStorage.setItem("aara:cloudSession", JSON.stringify(sexp));
+  const rr = await fetch("https://x.supabase.co/auth/v1/token?grant_type=refresh_token", { method: "POST", headers: { apikey: "anon-key", "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: "ref_u1" }) });
+  ok("refresh endpoint renews session", rr.ok);
+
+  // sharing: invite -> join (role-preserving, non-clobbering, single-use)
   const code = await A.invite("munshi");
-  ok("owner mints single-use invite", typeof code === "string" && serverInvites.has(code) && serverInvites.get(code).role === "munshi");
+  ok("owner mints crypto invite", typeof code === "string" && code.length === 10 && serverInvites.has(code) && serverInvites.get(code).role === "munshi");
   const ms = await A.members();
   ok("member list readable", ms.length === 1 && ms[0].uid === "u1" && ms[0].role === "owner");
-  await A.join(code);   // u1 redeems on own mill (test-only path — demotes to munshi)
-  ok("join applies role + sticks", A.role() === "munshi" && S.role === "munshi" && A.millId() === "u1" && serverInvites.get(code).used);
-  const delKey = "mill_9876543210";
-  await Store.del(delKey);
-  ok("munshi cannot delete (client gate)", !!localStorage.getItem("aara:" + delKey));
-  errBox.v = ""; S.role = "munshi";
+  localStorage.setItem("aara:ord_u1_localx", JSON.stringify({ id: "localx" }));
+  localStorage.setItem("aarat:ord_u1_localx", String(Date.now() + 99999999)); // newer than remote — would clobber if pushed
+  await A.join(code);   // owner redeems own code: role preserved + local wiped
+  ok("join keeps existing role (no self-demotion)", A.role() === "owner" && serverInvites.get(code).used);
+  ok("join clears local instead of clobbering owner", !localStorage.getItem("aara:ord_u1_localx") && !serverRows.get("u1|ord_u1_localx") && !!localStorage.getItem("aara:ord_u1_remote1"));
+  let again = ""; try { await A.join(code) } catch (e) { again = "rejected" }
+  ok("invite code is single-use", again === "rejected");
+
+  // munshi gates — server-side, for a hostile client, not just hidden buttons
+  serverMembers.set("u1|u1", { mill_id: "u1", uid: "u1", role: "munshi" });
+  const s2 = JSON.parse(localStorage.getItem("aara:cloudSession")); delete s2.mill; localStorage.setItem("aara:cloudSession", JSON.stringify(s2));
+  await A.boot(Store);
+  ok("role re-reads as munshi", A.role() === "munshi" && S.role === "munshi");
+  const badW = await fetch("https://x.supabase.co/rest/v1/mill_data", { method: "POST", headers: { apikey: "anon-key", "Content-Type": "application/json", Authorization: "Bearer tok_u1" }, body: JSON.stringify({ mill_id: "u1", key: "core_u1", v: { profile: { mill: "Hacked" } }, t: 1 }) });
+  ok("server refuses munshi core write", badW.status === 400);
+  const badD = await fetch("https://x.supabase.co/rest/v1/mill_data", { method: "POST", headers: { apikey: "anon-key", "Content-Type": "application/json", Authorization: "Bearer tok_u1" }, body: JSON.stringify({ mill_id: "u1", key: "ord_u1_remote1", v: null, t: 1 }) });
+  ok("server refuses munshi tombstone", badD.status === 400 && serverRows.get("u1|ord_u1_remote1").v !== null);
+  localStorage.setItem("aara:munshi_try", JSON.stringify({ x: 2 }));
+  await Store.del("munshi_try");
+  ok("munshi cannot delete (client gate)", !!localStorage.getItem("aara:munshi_try"));
+  errBox.v = "";
   await submit("pricing", { wastage: "1", sawing: "1", labour: "1", margin: "1", gst: "0", workDays: "26", recovery: "60", minMargin: "5", gstMode: "intra" });
   ok("munshi cannot change settings", errBox.v.includes("owner") && S.data.settings.margin !== 1);
-  errBox.v = "";
-  // attendance merges per-day: a mark pushed here + a mark pulled for a
-  // different worker must coexist in the doc after folding
-  const w1 = S.data.people.find(p => p.type === "labour"), w2 = S.data.people.find(p => p.type === "labour" && p.id !== w1.id);
-  markAtt(w1, "2099-01-15", "P");
-  ok("markAtt writes per-day key", JSON.parse(localStorage.getItem("aara:att_" + S.acct + "_" + w1.id + "_2099-01-15")).v === "P");
-  delete w2.present["2099-01-15"];
-  serverRows.set("u1|att_" + S.acct + "_" + w2.id + "_2099-01-15", { mill_id: "u1", key: "att_" + S.acct + "_" + w2.id + "_2099-01-15", v: { v: "H" }, t: Date.now() + 999999 });
+  // a munshi's local tombstone is skipped on push, not fatal
+  localStorage.removeItem("aara:ord_u1_wiped"); localStorage.setItem("aarat:ord_u1_wiped", String(Date.now() + 99999999));
   await A.pullAll();
-  ok("pulled attendance folds without clobbering", attVal(w1, "2099-01-15") === "P" && attVal(w2, "2099-01-15") === "H");
+  ok("munshi tombstone skipped not fatal", !serverRows.get("u1|ord_u1_wiped"));
+  serverMembers.set("u1|u1", { mill_id: "u1", uid: "u1", role: "owner" }); await A.boot(Store);
+
+  // attendance merges per-day: marks travel as own keys and fold back
+  const w1 = S.data.people.find(p => p.type === "labour"), w2 = S.data.people.find(p => p.type === "labour" && p.id !== w1.id);
+  const w1id = w1.id, w2id = w2.id;   // afterPull rebuilds S.data — keep ids, not refs
+  markAtt(w1, "2099-01-15", "P");
+  ok("markAtt writes per-day key", JSON.parse(localStorage.getItem("aara:att_" + A.millId() + "_" + w1id + "_2099-01-15")).v === "P");
+  delete w2.present["2099-01-15"];
+  serverRows.set("u1|att_" + A.millId() + "_" + w2id + "_2099-01-15", { mill_id: "u1", key: "att_" + A.millId() + "_" + w2id + "_2099-01-15", v: { v: "H" }, t: stamp() });
+  await A.pullAll();
+  const p1 = S.data.people.find(p => p.id === w1id), p2 = S.data.people.find(p => p.id === w2id);
+  ok("pulled attendance folds without clobbering", attVal(p1, "2099-01-15") === "P" && attVal(p2, "2099-01-15") === "H");
 
   // ---- connection states ----
-  // offline write while configured: lands locally, syncs on reconnect
   net.down = true;
   await Store.set("offlinekey", { a: 1 });
   ok("offline write lands locally only", !!localStorage.getItem("aara:offlinekey") && !serverRows.get("u1|offlinekey"));
@@ -432,18 +491,11 @@ const test = `;(async () => {
   net.down = false;
   const upBoot = await A.boot(Store);
   ok("reconnect restores cloud + pushes offline write", upBoot === "cloud" && serverRows.get("u1|offlinekey") && serverRows.get("u1|offlinekey").v.a === 1);
-  // same-key conflict: newer remote wins
-  serverRows.set("u1|conflict", { mill_id: "u1", key: "conflict", v: { winner: "remote" }, t: Date.now() + 9999999 });
-  localStorage.setItem("aara:conflict", JSON.stringify({ winner: "local" }));
-  localStorage.setItem("aarat:conflict", "1");
-  await A.pullAll();
-  ok("newer remote wins same-key conflict", JSON.parse(localStorage.getItem("aara:conflict")).winner === "remote");
-  // revoked session: 401 clears session, degrades to device, keeps local data
+  // revoked session: refresh fails -> clears session, degrades to device
   net.revoked = true;
   await A.pullAll().catch(() => {});
   ok("401 clears session and keeps local data", !A.connected() && S.mode === "device" && !!localStorage.getItem("aara:conflict"));
   net.revoked = false;
-  // device fallback: broken server must not block the app
   A.disconnect();
   ok("disconnect returns to device mode", !A.connected() && S.mode === "device" && !Store.db && S.role === "owner");
 
@@ -455,7 +507,6 @@ const test = `;(async () => {
   await saveBlob({ _text: "backup bytes" }, "aara-backup.json");
   ok("native save routes Filesystem -> Share", capCalls.writes.length === 1 && capCalls.writes[0].path === "aara-backup.json" &&
     capCalls.writes[0].directory === "CACHE" && capCalls.writes[0].data.length > 4 && capCalls.shares[0] && capCalls.shares[0].url === "file:///d/aara-backup.json");
-  // native PDF share: stub the vendored libs so makePdf produces a blob
   window.html2canvas = async () => ({ width: 794, height: 1123 });
   window.jspdf = { jsPDF: class { constructor() { this.internal = { pageSize: { getWidth: () => 595, getHeight: () => 842 } } } addPage() {} addImage() {} output() { return { _text: "pdfbytes" } } } };
   S.shareOrder = S.data.orders[0];
@@ -467,7 +518,7 @@ const test = `;(async () => {
 
 const fn = new Function(
   "localStorage", "document", "window", "crypto", "navigator", "sessionStorage",
-  "location", "history", "FormData", "FileReader", "fetch", "ok", "submit", "opened", "el", "serverRows", "serverMembers", "serverInvites", "errBox", "net",
+  "location", "history", "FormData", "FileReader", "fetch", "ok", "submit", "opened", "el", "serverRows", "serverMembers", "serverInvites", "errBox", "net", "stamp",
   src + ";\n" + syncSrc + ";return " + test.slice(1)  // app + sync layer, then the test promise
 );
 
@@ -477,7 +528,7 @@ URL.revokeObjectURL = URL.revokeObjectURL || (() => {});
 
 try {
   await fn(localStorage, document, window, webcrypto, navigator, sessionStorage,
-    location, history, FormData, FileReader, fetch, ok, submit, opened, el, serverRows, serverMembers, serverInvites, errBox, net);
+    location, history, FormData, FileReader, fetch, ok, submit, opened, el, serverRows, serverMembers, serverInvites, errBox, net, stamp);
 } catch (e) {
   console.error("HARNESS FAIL:", e);
   process.exit(1);

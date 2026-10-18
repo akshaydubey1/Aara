@@ -22,6 +22,16 @@ self.addEventListener("fetch",e=>{
     }).catch(()=>caches.match("./index.html")));
     return;
   }
+  // Pages and scripts are network-first so an update can never pair a new
+  // index.html with a stale cached script; fonts/icons stay cache-first.
+  const fresh=/\.(html|js)$/.test(new URL(e.request.url).pathname);
+  if(fresh){
+    e.respondWith(fetch(e.request).then(res=>{
+      if(res&&res.ok){const copy=res.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}
+      return res;
+    }).catch(()=>caches.match(e.request)));
+    return;
+  }
   e.respondWith(
     caches.match(e.request).then(hit=>hit||fetch(e.request).then(res=>{
       // cache same-origin assets and opaque responses (e.g. Google Fonts) so they work offline
