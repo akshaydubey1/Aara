@@ -53,8 +53,12 @@ const navigator = {};
 const location = { protocol: "http:", origin: "http://localhost", hostname: "localhost", hash: "" };
 const window = { scrollTo() {}, addEventListener() {}, open: u => opened.push(u), print() {} };
 const history = { replaceState() {} };
-// Fake Supabase server: rows keyed "uid|key", one session "tok_u1" -> user u1.
-const serverRows = new Map();
+// Fake Supabase server: one session "tok_u1" -> user "u1". Simulates the
+// mill_members / mill_data / mill_invites schema + RLS rules from
+// supabase/schema.sql faithfully enough to test the client.
+const serverRows = new Map();     // "mill|key" -> {mill_id,key,v,t}
+const serverMembers = new Map();  // "mill|uid" -> {mill_id,uid,role}
+const serverInvites = new Map();  // code -> {code,mill_id,role,used}
 const jres = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
 const fetch = async (url, opts = {}) => {
   const u = new URL(url);
@@ -63,27 +67,70 @@ const fetch = async (url, opts = {}) => {
     const b = JSON.parse(opts.body);
     return b.token === "123456" ? jres(200, { access_token: "tok_u1", user: { id: "u1" } }) : jres(400, { error: "bad" });
   }
-  if (u.pathname === "/rest/v1/mill_data") {
-    if ((opts.headers || {}).Authorization !== "Bearer tok_u1") return jres(401, {});
-    const keyEq = u.searchParams.get("key");
+  if ((opts.headers || {}).Authorization !== "Bearer tok_u1") return jres(401, {});
+  const me = "u1", roleOf = m => (serverMembers.get(m + "|" + me) || {}).role;
+  const eq = (u, p) => { const v = u.searchParams.get(p); return v && v.startsWith("eq.") ? v.slice(3) : null; };
+  if (u.pathname === "/rest/v1/mill_members") {
     if (!opts.method || opts.method === "GET") {
-      let rows = [...serverRows.values()].filter(r => r.uid === "u1");
-      if (keyEq && keyEq.startsWith("eq.")) rows = rows.filter(r => r.key === keyEq.slice(3));
+      let rows = [...serverMembers.values()].filter(r => r.uid === me || roleOf(r.mill_id));
+      const uid = eq(u, "uid"), mill = eq(u, "mill_id");
+      if (uid) rows = rows.filter(r => r.uid === uid);
+      if (mill) rows = rows.filter(r => r.mill_id === mill);
+      return jres(200, rows);
+    }
+    if (opts.method === "POST") {
+      const b = JSON.parse(opts.body);
+      if (b.uid === me && b.mill_id === me && b.role === "owner") { serverMembers.set(b.mill_id + "|" + b.uid, { ...b, created_at: "2026-01-01" }); return jres(201, []); }
+      return jres(403, {});
+    }
+    if (opts.method === "DELETE") {
+      const uid = eq(u, "uid"), mill = eq(u, "mill_id");
+      if (uid === me || roleOf(mill) === "owner") { serverMembers.delete(mill + "|" + uid); return jres(200, []); }
+      return jres(403, {});
+    }
+  }
+  if (u.pathname === "/rest/v1/mill_data") {
+    const mill = eq(u, "mill_id"), keyEq = eq(u, "key");
+    if (!opts.method || opts.method === "GET") {
+      let rows = [...serverRows.values()].filter(r => roleOf(r.mill_id));
+      if (mill) rows = rows.filter(r => r.mill_id === mill);
+      if (keyEq) rows = rows.filter(r => r.key === keyEq);
       return jres(200, rows);
     }
     if (opts.method === "POST") {
       const arr = Array.isArray(JSON.parse(opts.body)) ? JSON.parse(opts.body) : [JSON.parse(opts.body)];
-      arr.forEach(r => serverRows.set(r.uid + "|" + r.key, { uid: r.uid, key: r.key, v: r.v, t: r.t }));
+      for (const r of arr) { if (!roleOf(r.mill_id)) return jres(403, {}); }
+      arr.forEach(r => serverRows.set(r.mill_id + "|" + r.key, { mill_id: r.mill_id, key: r.key, v: r.v, t: r.t }));
       return jres(200, []);
     }
-    if (opts.method === "DELETE") { if (keyEq) serverRows.delete("u1|" + keyEq.slice(3)); return jres(200, []); }
+    if (opts.method === "DELETE") {
+      if (!mill || !["owner", "partner"].includes(roleOf(mill))) return jres(403, {});
+      if (keyEq) serverRows.delete(mill + "|" + keyEq);
+      return jres(200, []);
+    }
+  }
+  if (u.pathname === "/rest/v1/mill_invites") {
+    if (opts.method === "POST") {
+      const b = JSON.parse(opts.body);
+      if (roleOf(b.mill_id) !== "owner") return jres(403, {});
+      serverInvites.set(b.code, { code: b.code, mill_id: b.mill_id, role: b.role, used: false });
+      return jres(201, []);
+    }
+    return jres(200, [...serverInvites.values()].filter(i => roleOf(i.mill_id) === "owner"));
+  }
+  if (u.pathname === "/rest/v1/rpc/join_mill") {
+    const b = JSON.parse(opts.body), inv = serverInvites.get(b.p_code);
+    if (!inv || inv.used) return jres(400, { message: "invalid or expired invite code" });
+    serverMembers.set(inv.mill_id + "|" + me, { mill_id: inv.mill_id, uid: me, role: inv.role, created_at: "2026-01-02" });
+    inv.used = true;
+    return jres(200, inv.mill_id);
   }
   return jres(404, {});
 };
 class FormData { constructor(f) { return new Map(Object.entries(f._fd)); } }
 class FileReader { readAsText(f) { this.result = f._text; setTimeout(() => this.onload && this.onload(), 0); } }
-let lastErr = "";
-const errEl = { set textContent(v) { lastErr = v; }, get textContent() { return lastErr; } };
+const errBox = { v: "" };
+const errEl = { set textContent(v) { errBox.v = v; }, get textContent() { return errBox.v; } };
 const submit = (kind, fd, extra = {}) =>
   handlers.submit({ preventDefault() {}, target: { dataset: { form: kind, ...extra }, _fd: fd, querySelector: () => errEl } });
 const el = (dataset, props = {}) => ({ dataset, ...props });
@@ -325,8 +372,9 @@ const test = `;(async () => {
   await A.sendOtp("ash@test.com");
   await A.verify("123456");
   ok("sync connects after OTP", A.connected() && S.mode === "cloud");
+  ok("first connect self-creates owner mill", serverMembers.get("u1|u1") && A.role() === "owner" && A.millId() === "u1");
   // seed: server has newer mill doc; local has a newer key + a tombstone
-  serverRows.set("u1|mill_9876543210", { uid: "u1", key: "mill_9876543210", v: { profile: { mill: "Cloud Mill" }, people: [] }, t: Date.now() + 999999 });
+  serverRows.set("u1|mill_9876543210", { mill_id: "u1", key: "mill_9876543210", v: { profile: { mill: "Cloud Mill" }, people: [] }, t: Date.now() + 999999 });
   localStorage.setItem("aara:mill_9876543210", JSON.stringify({ profile: { mill: "Local Mill" } }));
   localStorage.setItem("aarat:mill_9876543210", "1000");
   localStorage.setItem("aara:localonly", JSON.stringify({ x: 1 }));
@@ -341,20 +389,43 @@ const test = `;(async () => {
   ok("sync never pushes config", !serverRows.get("u1|cloud") && !serverRows.get("u1|cloudSession"));
   await Store.del("localonly");
   ok("Store.del tombstones remotely", !localStorage.getItem("aara:localonly") && serverRows.get("u1|localonly").v === null);
+  // sharing: invite code -> join -> role sticks
+  const code = await A.invite("munshi");
+  ok("owner mints single-use invite", typeof code === "string" && serverInvites.has(code) && serverInvites.get(code).role === "munshi");
+  const ms = await A.members();
+  ok("member list readable", ms.length === 1 && ms[0].uid === "u1" && ms[0].role === "owner");
+  await A.join(code);   // u1 redeems on own mill (test-only path — demotes to munshi)
+  ok("join applies role + sticks", A.role() === "munshi" && S.role === "munshi" && A.millId() === "u1" && serverInvites.get(code).used);
+  const delKey = "mill_9876543210";
+  await Store.del(delKey);
+  ok("munshi cannot delete (client gate)", !!localStorage.getItem("aara:" + delKey));
+  errBox.v = ""; S.role = "munshi";
+  await submit("pricing", { wastage: "1", sawing: "1", labour: "1", margin: "1", gst: "0", workDays: "26", recovery: "60", minMargin: "5", gstMode: "intra" });
+  ok("munshi cannot change settings", errBox.v.includes("owner") && S.data.settings.margin !== 1);
+  errBox.v = "";
+  // attendance merges per-day: a mark pushed here + a mark pulled for a
+  // different worker must coexist in the doc after folding
+  const w1 = S.data.people.find(p => p.type === "labour"), w2 = S.data.people.find(p => p.type === "labour" && p.id !== w1.id);
+  markAtt(w1, "2099-01-15", "P");
+  ok("markAtt writes per-day key", JSON.parse(localStorage.getItem("aara:att_" + S.acct + "_" + w1.id + "_2099-01-15")).v === "P");
+  delete w2.present["2099-01-15"];
+  serverRows.set("u1|att_" + S.acct + "_" + w2.id + "_2099-01-15", { mill_id: "u1", key: "att_" + S.acct + "_" + w2.id + "_2099-01-15", v: { v: "H" }, t: Date.now() + 999999 });
+  await A.pullAll();
+  ok("pulled attendance folds without clobbering", attVal(w1, "2099-01-15") === "P" && attVal(w2, "2099-01-15") === "H");
   // device fallback: broken server must not block the app
   A.disconnect();
-  ok("disconnect returns to device mode", !A.connected() && S.mode === "device" && !Store.db);
+  ok("disconnect returns to device mode", !A.connected() && S.mode === "device" && !Store.db && S.role === "owner");
 })()`;
 
 const fn = new Function(
   "localStorage", "document", "window", "crypto", "navigator", "sessionStorage",
-  "location", "history", "FormData", "FileReader", "fetch", "ok", "submit", "opened", "el", "serverRows",
+  "location", "history", "FormData", "FileReader", "fetch", "ok", "submit", "opened", "el", "serverRows", "serverMembers", "serverInvites", "errBox",
   src + ";\n" + syncSrc + ";return " + test.slice(1)  // app + sync layer, then the test promise
 );
 
 try {
   await fn(localStorage, document, window, webcrypto, navigator, sessionStorage,
-    location, history, FormData, FileReader, fetch, ok, submit, opened, el, serverRows);
+    location, history, FormData, FileReader, fetch, ok, submit, opened, el, serverRows, serverMembers, serverInvites, errBox);
 } catch (e) {
   console.error("HARNESS FAIL:", e);
   process.exit(1);

@@ -17,7 +17,7 @@ _Prepared 18 Oct 2026. The working product is `index.html` — a single-page PWA
 | WhatsApp | Templates, send queue, customer broadcasts, provider config placeholder for API sending. |
 | Data safety | Auto-backups on a schedule with retention, manual backup, validated import (merge or replace, current data saved first), data repair tool, Excel exports. |
 | Settings | Mill profile, letterhead/bank/payment details, licence expiry alert, pricing defaults, overheads, 13 languages (incl. RTL Urdu). |
-| Architecture | Local-first `localStorage` under a `Store` seam; every cloud write also lands locally. Optional `sync.js` (Supabase REST, last-write-wins per key, email/SMS OTP) attaches through that seam — `supabase/schema.sql` + docs/sync-setup.md. Capacitor shell for native apps — capacitor.config.json + docs/app-build.md. |
+| Architecture | Local-first `localStorage` under a `Store` seam; every cloud write also lands locally. Optional `sync.js` (Supabase REST, email/SMS OTP) attaches through that seam — `supabase/schema.sql` + docs/sync-setup.md. Sync is mill-scoped: the owner invites a partner or munshi with a single-use code; roles are enforced by RLS (member read/write, owner+partner delete, owner member management) and in-app (munshi cannot touch settings). Merges are last-write-wins per key with tombstoned deletes; attendance marks sync per-day so two people marking different workers never collide. Capacitor shell for native apps — capacitor.config.json + docs/app-build.md. |
 
 ## 2. Research findings used
 - **GST**: logs (HSN 4403) and sawn timber (HSN 4407) at 18% from 22 Sep 2025; firewood (4401) exempt.
