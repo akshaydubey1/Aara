@@ -208,6 +208,21 @@ const test = `;(async () => {
   ok("order search filters", (() => { S.tab = "orders"; render(); return true; })() &&
      S.data.orders.filter(o => ((o.customer || "") + " " + (o.phone || "") + " " + o.no).toLowerCase().includes("verma")).length === 0);
   S.orderQ = "";
+
+  // custom wood removal is blocked while the wood is referenced anywhere
+  await submit("customWood", { en: "Test Wood", hn: "", uses: "testing" });
+  const cw = S.data.customWoods.at(-1);
+  ok("custom wood added", cw && cw.en === "Test Wood" && cw.id.startsWith("c_"));
+  S.data.orders.push({ id: "oc1", no: 99, date: today(), kind: "sale", status: "quote", customer: "X", phone: "", items: [{ wood: cw.id, mode: "sawn", L: 5, W: 4, T: 2, pcs: 1, rate: 500 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false });
+  await ACT.doDel({ dataset: { kind: "cwood", id: cw.id } });
+  ok("in-use custom wood cannot be removed", !!S.data.customWoods.find(c => c.id === cw.id));
+  S.data.orders = S.data.orders.filter(o => o.id !== "oc1");
+  await ACT.doDel({ dataset: { kind: "cwood", id: cw.id } });
+  ok("unused custom wood removed", !S.data.customWoods.find(c => c.id === cw.id));
+
+  // demo mill carries a licence expiry so the renewal warning shows
+  const dm = demoMill();
+  ok("demo licence expiry set", !!dm.profile.licenceExp && daysUntil(dm.profile.licenceExp) < 60);
 })()`;
 
 const fn = new Function(

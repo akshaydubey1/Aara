@@ -1,7 +1,8 @@
 /* Aara service worker — offline support.
-   Cache-first for the app shell; same-origin GETs are cached as they are fetched.
+   Navigations are network-first (so updates reach users) with a cached
+   fallback; static assets are cache-first and filled as they are fetched.
    Bump CACHE when shipping changes that must bypass old cached assets. */
-const CACHE="aara-v1";
+const CACHE="aara-v2";
 const ASSETS=["./","./index.html","./manifest.webmanifest","./icon.svg","./icon-192.png","./icon-512.png","./apple-touch-icon.png"];
 
 self.addEventListener("install",e=>{
@@ -14,6 +15,13 @@ self.addEventListener("activate",e=>{
 
 self.addEventListener("fetch",e=>{
   if(e.request.method!=="GET")return;
+  if(e.request.mode==="navigate"){
+    e.respondWith(fetch(e.request).then(res=>{
+      const copy=res.clone();caches.open(CACHE).then(c=>c.put("./index.html",copy));
+      return res;
+    }).catch(()=>caches.match("./index.html")));
+    return;
+  }
   e.respondWith(
     caches.match(e.request).then(hit=>hit||fetch(e.request).then(res=>{
       // cache same-origin assets and opaque responses (e.g. Google Fonts) so they work offline

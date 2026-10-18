@@ -336,7 +336,7 @@ function migrate(d){d=d&&typeof d==="object"?d:{};
   d.auctions.forEach(a=>{if(a&&typeof a==="object"&&!ASTAT[a.status])a.status="watching"});
   return d}
 function demoMill(){
-  const d=newMill({mill:"Shree Ganesh Saw Mill",owner:"Ramesh Patel",mobile:"9000000000",state:"Madhya Pradesh",district:"Jabalpur",gstin:"",licence:"WBI/JBP/2021/014",demo:true});
+  const d=newMill({mill:"Shree Ganesh Saw Mill",owner:"Ramesh Patel",mobile:"9000000000",state:"Madhya Pradesh",district:"Jabalpur",gstin:"",licence:"WBI/JBP/2021/014",licenceExp:addDays(45),demo:true});
   const P=(type,name,role,phone,extra={})=>({id:uid(),type,name,role,phone,active:true,joined:"2022-04-01",present:{},...extra});
   d.people=[P("owner","Ramesh Patel","Managing owner","9000000000",{share:60}),P("owner","Suresh Patel","Partner","9000000001",{share:25}),P("coowner","Anita Patel","Co-owner (accounts)","9000000002",{share:15}),
     P("labour","Mohan Lal","Head sawyer","9000000011",{wageType:"daily",wage:750}),P("labour","Rajesh Kumar","Sawyer","9000000012",{wageType:"daily",wage:600}),P("labour","Sunil Yadav","Helper","9000000013",{wageType:"daily",wage:450}),
@@ -594,8 +594,8 @@ function viewStock(){
     <div style="flex:0 1 240px">${sel("woodcat",[["","All categories"],...Object.entries(CATS)],S.woodCat,'data-act-change="woodCat" aria-label="Category"')}</div></div>
     <p class="small muted">Rates are indicative trade ranges for sawn timber from 2025–26 market listings. They vary a lot by grade, girth and city. Set your own rates when you add a wood.</p>
     <div class="tablewrap"><table><thead><tr><th>Wood</th><th>Category</th><th>Used for</th><th class="r">Indicative ₹/CFT</th><th></th></tr></thead><tbody>
-    ${all.map(w=>{const has=!!d.stock[w.id];return `<tr><td><b>${esc(w.en)}</b><div class="small muted">${esc(w.hn||"")}</div></td><td><span class="sw" style="background:${CATCOL[w.cat]||"var(--muted)"}"></span>${esc(CATS[w.cat]||"Custom")}</td><td class="small">${esc(w.uses||"")}${w.note?`<div class="small" style="color:var(--bad)">${esc(w.note)}</div>`:""}</td>
-      <td class="r num">${w.lo?inr(w.lo)+" – "+inr(w.max).slice(1):"—"}</td><td class="r">${has?`<span class="pill p-ok">In my stock</span>`:`<span class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm ${w.cat==="RS"?"":"primary"}" data-act="addStock" data-id="${w.id}">${t("add")}</button>${!w.cat?`<button class="btn sm danger" data-act="askDel" data-kind="cwood" data-id="${w.id}">${t("remove")}</button>`:""}</span>`}</td></tr>`}).join("")||`<tr><td colspan="5" class="muted">No wood matches. Use “Wood not in list” to add it.</td></tr>`}
+    ${all.map(w=>{const has=!!d.stock[w.id];const used=d.orders.some(o=>(o.items||[]).some(i=>i.wood===w.id))||d.moves.some(m=>m.wood===w.id);return `<tr><td><b>${esc(w.en)}</b><div class="small muted">${esc(w.hn||"")}</div></td><td><span class="sw" style="background:${CATCOL[w.cat]||"var(--muted)"}"></span>${esc(CATS[w.cat]||"Custom")}</td><td class="small">${esc(w.uses||"")}${w.note?`<div class="small" style="color:var(--bad)">${esc(w.note)}</div>`:""}</td>
+      <td class="r num">${w.lo?inr(w.lo)+" – "+inr(w.max).slice(1):"—"}</td><td class="r">${has?`<span class="pill p-ok">In my stock</span>`:`<span class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm ${w.cat==="RS"?"":"primary"}" data-act="addStock" data-id="${w.id}">${t("add")}</button>${!w.cat&&!used?`<button class="btn sm danger" data-act="askDel" data-kind="cwood" data-id="${w.id}">${t("remove")}</button>`:""}</span>`}</td></tr>`}).join("")||`<tr><td colspan="5" class="muted">No wood matches. Use “Wood not in list” to add it.</td></tr>`}
     </tbody></table></div>`}`;
 }
 
@@ -799,7 +799,7 @@ const ACT={
     if(k==="person")d.people=d.people.filter(p=>p.id!==id);
     if(k==="auction")d.auctions=d.auctions.filter(a=>a.id!==id);
     if(k==="stock")delete d.stock[id];
-    if(k==="cwood")d.customWoods=d.customWoods.filter(c=>c.id!==id);
+    if(k==="cwood"){if(d.stock[id]||d.orders.some(o=>(o.items||[]).some(i=>i.wood===id))||d.moves.some(m=>m.wood===id)){closeModal();toast("That wood is used in your stock, orders or ledger — it cannot be removed");return}d.customWoods=d.customWoods.filter(c=>c.id!==id)}
     if(k==="order"){const o=d.orders.find(x=>x.id===id);if(o&&o.deducted&&o.kind==="sale")restoreStock(o);d.orders=d.orders.filter(x=>x.id!==id)}
     closeModal();
     if(k==="account"){await Store.del("mill_"+S.acct);if(S.acct!=="demo"){delete S.accounts[S.acct];await Store.set("accounts",S.accounts)}ACT.logout();toast("Account deleted");return}
@@ -943,6 +943,11 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
   let sess=null;try{sess=sessionStorage.getItem("aara:session")}catch(e){}
   if(sess){const m=await Store.get("mill_"+sess);if(m){S.acct=sess;S.data=migrate(m);S.screen="app";
     const h=(location.hash||"").slice(1);if(["people","auctions","stock","orders","more"].includes(h))S.tab=h;render();return}}
+  const h0=(location.hash||"").slice(1);
+  if(h0==="demo"||h0.startsWith("demo/")){
+    await enter("demo",(await Store.get("mill_demo"))||demoMill());
+    const sub=h0.split("/")[1];if(["people","auctions","stock","orders","more"].includes(sub)){S.tab=sub;render()}
+    return}
   S.screen="auth";render();
 })();
 </script>
