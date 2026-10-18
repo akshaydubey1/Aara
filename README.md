@@ -1,6 +1,6 @@
 # Aara — Sawmill Manager for India
 
-A web app for Indian sawmill owners. It runs in any browser and can be installed to the home screen on Android, iPhone, Windows and Mac.
+A web app for Indian sawmill owners. It runs in any browser, works offline after the first visit, and can be installed to the home screen on Android, iPhone, Windows and Mac.
 
 ## Features
 
@@ -8,17 +8,27 @@ A web app for Indian sawmill owners. It runs in any browser and can be installed
 - **People**: owners, co-owners (share %) and labour (daily, monthly or piece-rate wages). Add, edit, remove, daily attendance and monthly wage-bill estimate.
 - **Auctions**: where government timber is sold (HP, J&K, MP, Maharashtra, Kerala, AP, Haryana, UP, West Bengal forest corporations and the Kandla hub), how each auction works, and a personal auction diary.
 - **Stock**: 48 Indian and imported timbers with Hindi names and indicative ₹/CFT. Track logs and sawn stock in CFT with low-stock alerts and an in/out ledger.
-- **Orders and estimates**: CFT from sawn size (L ft × W in × T in ÷ 144), round logs (Hoppus quarter-girth rule) or running feet. Suggested rate from cost + margin, break-even warning, GST 18% (CGST+SGST or IGST), advance and balance, WhatsApp-ready quote. Confirming an order reduces stock. Supports job work (chirai).
+- **Orders and estimates**: CFT from sawn size (L ft × W in × T in ÷ 144), round logs (Hoppus quarter-girth rule) or running feet. Suggested rate from cost + margin, break-even warning, GST 18% (CGST+SGST or IGST), advance and balance, WhatsApp-ready quote, print/PDF. Confirming an order reduces stock; cancelling or removing it restores stock. Supports job work (chirai).
 - **13 languages**: English, Hindi, Marathi, Gujarati, Punjabi, Bengali, Tamil, Telugu, Kannada, Malayalam, Odia, Assamese, Urdu.
+- **Offline-first**: a service worker caches the app so it opens and works with no connection.
 
 ## Run it
 
-It is a single static page with no build step.
+It is static files with no build step.
 
 ```bash
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
+
+Serve over `http://` or `https://` (not `file://`) so the service worker and offline mode work.
+
+## Files
+
+- `index.html` — the whole app (markup, styles and logic; no build step)
+- `sw.js` — service worker (offline cache)
+- `manifest.webmanifest`, `icon.svg`, `icon-192.png`, `icon-512.png`, `apple-touch-icon.png` — installable PWA bits
+- `docs/blueprint.md` — research notes and the recommended production stack
 
 To publish, enable **GitHub Pages** (Settings → Pages → Deploy from branch → `main` / root).
 
