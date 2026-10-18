@@ -191,6 +191,23 @@ const test = `;(async () => {
   ok("migrate repairs statuses/items", junk.orders[0].status === "quote" &&
      junk.orders[0].items.length === 1 && junk.auctions[0].status === "watching" &&
      junk.people[0].type === "labour" && junk.profile.owner === "Owner");
+
+  // salesByMonth returns n chronological buckets and counts only sold orders
+  // (reset the fixture — earlier tests saved an extra confirmed order)
+  S.data.orders = [
+    { id: "o1", no: 1, date: today(), kind: "sale", status: "delivered", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 100, gstOn: false, deducted: true },
+    { id: "o2", no: 2, date: today(), kind: "sale", status: "quote", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
+    { id: "o3", no: 3, date: today(), kind: "sale", status: "cancelled", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
+  ];
+  const sbm = salesByMonth(6);
+  ok("salesByMonth shape", sbm.length === 6 && sbm.every(([k]) => /^\\d{4}-\\d{2}$/.test(k)) &&
+     Math.abs(sbm.at(-1)[1] - per) < 0.05 && sbm.slice(0, 5).every(([, v]) => v === 0));
+
+  // order search filters by customer / phone / number
+  S.orderQ = "verma"; // note: test orders above have no customer -> empty result expected
+  ok("order search filters", (() => { S.tab = "orders"; render(); return true; })() &&
+     S.data.orders.filter(o => ((o.customer || "") + " " + (o.phone || "") + " " + o.no).toLowerCase().includes("verma")).length === 0);
+  S.orderQ = "";
 })()`;
 
 const fn = new Function(

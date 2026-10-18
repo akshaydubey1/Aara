@@ -284,7 +284,7 @@ const NAVS=[["home","M3 11 12 3l9 8v10h-6v-6H9v6H3z"],["people","M16 11a3 3 0 1 
 
 /* ============ state & storage ============ */
 const VERSION="1.1";
-const S={lang:"en",screen:"loading",authTab:"login",tab:"home",acct:null,data:null,accounts:{},peopleTab:"owner",q:"",stockTab:"mine",woodQ:"",woodCat:"",orderFilter:"open",draft:null,auctionState:"",aDay:null,pendingImport:null};
+const S={lang:"en",screen:"loading",authTab:"login",tab:"home",acct:null,data:null,accounts:{},peopleTab:"owner",q:"",stockTab:"mine",woodQ:"",woodCat:"",orderFilter:"open",orderQ:"",draft:null,auctionState:"",aDay:null,pendingImport:null};
 try{S.lang=localStorage.getItem("aara:lang")||"en"}catch(e){}
 
 const Store={
@@ -383,6 +383,8 @@ function totals(o){
 }
 function receivables(){return S.data.orders.reduce((a,o)=>["confirmed","cutting","delivered"].includes(o.status)?a+Math.max(0,totals(o).balance):a,0)}
 function monthSales(){const mo=today().slice(0,7);return S.data.orders.reduce((a,o)=>o.date&&o.date.slice(0,7)===mo&&!["quote","cancelled"].includes(o.status)?a+totals(o).total:a,0)}
+function salesByMonth(n){const m={};S.data.orders.forEach(o=>{if(!o.date||["quote","cancelled"].includes(o.status))return;const k=o.date.slice(0,7);m[k]=(m[k]||0)+totals(o).total});
+  const out=[],now=new Date();for(let i=n-1;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const k=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");out.push([k,m[k]||0])}return out}
 function stockCft(){return Object.values(S.data.stock).reduce((a,s)=>a+(+s.qty||0),0)}
 function stockValue(){return Object.values(S.data.stock).reduce((a,s)=>a+(+s.qty||0)*(+s.sell||0),0)}
 function lowStock(){return Object.entries(S.data.stock).filter(([k,s])=>(+s.min||0)>0&&(+s.qty||0)<=(+s.min||0))}
@@ -456,9 +458,12 @@ function viewHome(){
   const low=lowStock();
   const hr=new Date().getHours();const greet=hr<12?"Good morning":hr<17?"Good afternoon":"Good evening";
   const backupDue=!d.profile.demo&&(d.lastBackup?Date.now()-d.lastBackup>14*864e5:daysUntil(d.profile.createdAt||today())<-7);
+  const licDays=d.profile.licenceExp?daysUntil(d.profile.licenceExp):null;
+  const bars=salesByMonth(6),mx=Math.max(...bars.map(b=>b[1]),0);
   return `<div class="topbar"><div><p class="label">${fdate(today())}</p><h1>${greet}, ${esc(d.profile.owner.split(" ")[0])}</h1></div>
     <div class="row"><button class="btn primary" data-act="newOrder">+ ${t("newEstimate")}</button><button class="btn" data-act="addPerson" data-v="labour">+ ${t("labour")}</button></div></div>
   ${backupDue?`<div class="banner warn"><b>Backup overdue.</b>&nbsp;Your mill data lives only in this browser. <button class="btn ghost sm" style="padding:0 4px;min-height:0" data-act="export">Export a copy</button> — it takes ten seconds.</div>`:""}
+  ${licDays!==null&&licDays<60?`<div class="banner warn"><b>Machinery licence ${licDays<0?"expired":"expires in "+licDays+" days"}.</b>&nbsp;Renewal needs State Level Committee approval — start early. Update it under More.</div>`:""}
   <div class="kpis">
     <div class="card kpi"><p class="label">${t("stock")}</p><p class="v num">${fx(stockCft(),0)} <span style="font-size:15px">CFT</span></p><p class="s">Worth ${inr(stockValue())} at your selling rates</p></div>
     <div class="card kpi"><p class="label">Open ${t("orders")}</p><p class="v num">${open.length}</p><p class="s">${inr(openVal)} incl. GST${receivables()?` · ${inr(receivables())} to collect`:""}</p></div>
@@ -472,6 +477,7 @@ function viewHome(){
     <div class="stack">
       <div class="card stack"><h3>Low stock</h3>${low.length?`<div class="list">${low.map(([k,s])=>`<div class="it"><div><b>${esc(woodName(k))}</b><div class="small muted">Alert at ${s.min} CFT</div></div><span class="pill p-bad num">${fx(s.qty,1)} CFT</span></div>`).join("")}</div>`:`<p class="muted small">All woods are above their alert level.</p>`}</div>
       <div class="card stack"><h3>${t("upcoming")} ${t("auctions")}</h3>${up.length?`<div class="list">${up.slice(0,3).map(a=>`<div class="it"><div><b>${esc(a.depot||a.org)}</b><div class="small muted">${fdate(a.date)} · ${esc(a.species)}</div></div><span class="pill ${ASTAT[a.status][1]}">${ASTAT[a.status][0]}</span></div>`).join("")}</div>`:`<p class="muted small">No auctions in your diary.</p>`}</div>
+      ${mx?`<div class="card stack"><h3>Sales — last 6 months</h3><div class="row" style="align-items:flex-end;gap:8px;height:80px;flex-wrap:nowrap">${bars.map(([k,v])=>`<div title="${k}: ${inr(v)}" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0"><div class="small muted num" style="text-align:center;font-size:11px">${v?inr(v).replace("₹","₹"):""}</div><div style="height:${Math.max(4,Math.round(v/mx*78))}%;background:var(--forest);border-radius:4px 4px 0 0"></div><div class="small muted" style="text-align:center;font-size:11px">${new Date(k+"-02T00:00:00").toLocaleDateString("en-IN",{month:"short"})}</div></div>`).join("")}</div></div>`:""}
     </div>
   </div>`;
 }
@@ -603,9 +609,12 @@ function stockForm(id){
 
 function viewOrders(){
   const d=S.data;const f=S.orderFilter;
-  const list=[...d.orders].filter(o=>f==="all"||(f==="open"?["quote","confirmed","cutting"].includes(o.status):["delivered","paid"].includes(o.status))).sort((a,b)=>b.no-a.no);
+  const q=(S.orderQ||"").toLowerCase();
+  const list=[...d.orders].filter(o=>f==="all"||(f==="open"?["quote","confirmed","cutting"].includes(o.status):["delivered","paid"].includes(o.status)))
+    .filter(o=>!q||((o.customer||"")+" "+(o.phone||"")+" "+o.no).toLowerCase().includes(q)).sort((a,b)=>b.no-a.no);
   return `<div class="topbar"><div><p class="label">Quotes, sales and job work</p><h1>${t("orders")}</h1></div><button class="btn primary" data-act="newOrder">+ ${t("newEstimate")}</button></div>
-  <div class="tabs" role="tablist">${[["open","Open"],["done","Completed"],["all","All"]].map(([k,l])=>`<button role="tab" data-act="ofilter" data-v="${k}" aria-selected="${f===k}">${l}</button>`).join("")}</div>
+  <div class="row between"><div class="tabs" role="tablist">${[["open","Open"],["done","Completed"],["all","All"]].map(([k,l])=>`<button role="tab" data-act="ofilter" data-v="${k}" aria-selected="${f===k}">${l}</button>`).join("")}</div>
+    <div style="width:min(240px,100%)"><input id="f_orderq" placeholder="${t("search")}…" value="${esc(S.orderQ)}" data-act-input="orderQ" aria-label="${t("search")}"></div></div>
   ${(()=>{const rec=receivables(),ms=monthSales();return rec||ms?`<p class="small muted">${rec?inr(rec)+" to collect":""}${rec&&ms?" · ":""}${ms?inr(ms)+" sold this month":""}</p>`:""})()}
   ${list.length?`<div class="tablewrap"><table><thead><tr><th>No.</th><th>${t("customer")}</th><th>Type</th><th class="r">CFT</th><th class="r">${t("total")}</th><th class="r">Balance</th><th>Status</th><th></th></tr></thead><tbody>
   ${list.map(o=>{const tt=totals(o);return `<tr><td><span class="lot">${o.no}</span><div class="small muted">${fdate(o.date)}</div></td><td><b>${esc(o.customer||"Walk-in")}</b><div class="small muted num">${esc(o.phone||"")}</div></td><td>${o.kind==="job"?"Job work":"Timber sale"}</td>
@@ -762,7 +771,7 @@ function adjustStock(prev,o){const a=cftByWood(prev),b=cftByWood(o);
     s.qty=Math.max(0,Math.round((s.qty-diff)*100)/100);logMove({id:uid(),date:today(),wood:w,delta:-diff,note:"Order #"+o.no+" updated"})})}
 
 const ACT={
-  tab(el){S.tab=el.dataset.v;if(el.dataset.pt)S.peopleTab=el.dataset.pt;S.q="";try{history.replaceState(null,"","#"+S.tab)}catch(e){}render();window.scrollTo(0,0)},
+  tab(el){S.tab=el.dataset.v;if(el.dataset.pt)S.peopleTab=el.dataset.pt;S.q="";S.orderQ="";try{history.replaceState(null,"","#"+S.tab)}catch(e){}render();window.scrollTo(0,0)},
   authtab(el){S.authTab=el.dataset.v;render()},
   legal(){openModal(legalHTML(),true)},
   close(){closeModal()},
