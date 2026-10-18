@@ -353,6 +353,7 @@ function migrate(d){d=d&&typeof d==="object"?d:{};
   d.orders.forEach(o=>{if(!o||typeof o!=="object")return;o.items=(Array.isArray(o.items)?o.items:[]).filter(i=>i&&typeof i==="object");
     if(!STATUS[o.status])o.status="quote";o.no=+o.no||0;if(!o.id)o.id=uid()});
   d.auctions.forEach(a=>{if(a&&typeof a==="object"&&!ASTAT[a.status])a.status="watching"});
+  d.seq=Math.max(d.seq,d.orders.reduce((m,o)=>Math.max(m,+o.no||0),0)+1);
   return d}
 function demoMill(){
   const d=newMill({mill:"Shree Ganesh Saw Mill",owner:"Ramesh Patel",mobile:"9000000000",state:"Madhya Pradesh",district:"Jabalpur",gstin:"",licence:"WBI/JBP/2021/014",licenceExp:addDays(45),demo:true});
@@ -810,8 +811,9 @@ function legalHTML(){return `<div class="stack"><div class="row between"><h2>${t
   <p class="muted small">Last updated ${fdate(today())}.</p></div></div>`}
 
 /* ============ modal ============ */
-function openModal(html,wide){$("#modal").innerHTML=`<div class="scrim" data-act="scrim"><div class="modal ${wide?"wide":""}" role="dialog" aria-modal="true">${html}</div></div>`;const f=$("#modal input:not([disabled]),#modal select");if(f)f.focus()}
-function closeModal(){$("#modal").innerHTML=""}
+function openModal(html,wide){$("#modal").innerHTML=`<div class="scrim" data-act="scrim"><div class="modal ${wide?"wide":""}" role="dialog" aria-modal="true">${html}</div></div>`;S.modalDirty=false;const f=$("#modal input:not([disabled]),#modal select");if(f)f.focus()}
+function closeModal(){$("#modal").innerHTML="";S.modalDirty=false}
+function tryCloseModal(){if(S.modalDirty){toast("You have unsaved changes — use Cancel to discard them");return}closeModal()}
 
 /* ============ actions ============ */
 async function loadAccounts(){S.accounts=(await Store.get("accounts"))||{}}
@@ -828,7 +830,7 @@ const ACT={
   authtab(el){S.authTab=el.dataset.v;render()},
   legal(){openModal(legalHTML(),true)},
   close(){closeModal()},
-  scrim(el,e){if(e.target===el)closeModal()},
+  scrim(el,e){if(e.target===el)tryCloseModal()},
   async demo(){await enter("demo",(await Store.get("mill_demo"))||demoMill())},
   logout(){S.acct=null;S.data=null;S.screen="auth";S.authTab="login";try{sessionStorage.removeItem("aara:session")}catch(e){}render()},
   ptab(el){S.peopleTab=el.dataset.v;S.q="";render()},
@@ -918,13 +920,14 @@ const CHANGE={
 };
 
 document.addEventListener("click",e=>{const el=e.target.closest("[data-act]");if(!el)return;const f=ACT[el.dataset.act];if(f){if(el.tagName==="BUTTON"&&el.type!=="submit")e.preventDefault();f(el,e)}});
-document.addEventListener("change",e=>{const el=e.target.closest("[data-act-change]");if(el&&CHANGE[el.dataset.actChange])CHANGE[el.dataset.actChange](el)});
+document.addEventListener("change",e=>{if(e.target.closest&&e.target.closest("#modal"))S.modalDirty=true;const el=e.target.closest("[data-act-change]");if(el&&CHANGE[el.dataset.actChange])CHANGE[el.dataset.actChange](el)});
 document.addEventListener("input",e=>{const el=e.target;
+  if(el.closest&&el.closest("#modal"))S.modalDirty=true;
   if(el.dataset.actInput){S[el.dataset.actInput]=el.value;const pos=el.selectionStart;render();const n=$("#"+el.id);if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return}
   if(el.dataset.li!==undefined){if(!S.draft||!S.draft.items[+el.dataset.li])return;S.draft.items[+el.dataset.li][el.dataset.k]=el.value===""?"":+el.value;S.draft.dirty=true;recalc();return}
   if(el.dataset.of){if(!S.draft)return;S.draft[el.dataset.of]=el.type==="number"?(+el.value||0):el.value;S.draft.dirty=true;recalc()}});
 document.addEventListener("keydown",e=>{
-  if(e.key==="Escape"&&$("#modal").innerHTML)closeModal();
+  if(e.key==="Escape"&&$("#modal").innerHTML)tryCloseModal();
   if(e.key!=="Tab")return;const md=document.querySelector("#modal .modal");if(!md)return;
   const f=[...md.querySelectorAll("button,input,select,textarea,a[href]")].filter(x=>!x.disabled&&x.offsetParent!==null);
   if(!f.length)return;const first=f[0],last=f[f.length-1];
