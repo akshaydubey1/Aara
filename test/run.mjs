@@ -223,6 +223,13 @@ const test = `;(async () => {
   // demo mill carries a licence expiry so the renewal warning shows
   const dm = demoMill();
   ok("demo licence expiry set", !!dm.profile.licenceExp && daysUntil(dm.profile.licenceExp) < 60);
+
+  // an order with no positive-quantity items cannot be saved
+  ACT.newOrder(); S.draft.items[0].pcs = 0; S.draft.items[0].L = 0;
+  const nOrders = S.data.orders.length;
+  ok("empty order not saved", saveDraft() === false && S.data.orders.length === nOrders);
+  S.draft.items[0].pcs = 4; S.draft.items[0].L = 7;
+  ok("valid draft saves", saveDraft() === true && S.data.orders.length === nOrders + 1);
 })()`;
 
 const fn = new Function(

@@ -813,9 +813,10 @@ const ACT={
   addLine(){S.draft.items.push(blankItem(S.draft.kind));S.draft.dirty=true;render()},
   delLine(el){S.draft.items.splice(+el.dataset.i,1);S.draft.dirty=true;render()},
   useSug(el){S.draft.items[+el.dataset.i].rate=+el.dataset.v;S.draft.dirty=true;const f=$("#f_rate_"+el.dataset.i);if(f)f.value=el.dataset.v;recalc()},
-  saveOrder(){saveDraft();toast("Order #"+S.draft.no+" saved")},
+  saveOrder(){if(!saveDraft())return;toast("Order #"+S.draft.no+" saved")},
   confirmOrder(){const o=S.draft;if(o.deducted)return;
-    const short=deductStock(o);o.status="confirmed";saveDraft();render();
+    if(!(o.items||[]).some(it=>lineQty(it)>0)){toast("Add at least one item with a quantity before confirming");return}
+    const short=deductStock(o);o.status="confirmed";if(!saveDraft())return;render();
     toast(short.length?"Order confirmed — but "+short.join(", ")+" ran out of stock. Check Stock.":"Order confirmed and stock reduced")},
   async copyQuote(){const txt=quoteText(S.draft);const box=$("#copyBox");
     try{await navigator.clipboard.writeText(txt);box.hidden=true;box.value="";toast("Copied. Paste it in WhatsApp.")}catch(e){box.hidden=false;box.value=txt;box.focus();box.select();toast("Select all and copy the text below")}},
@@ -832,6 +833,7 @@ const ACT={
     openModal(`<div class="stack"><h2>Backup</h2><p class="small muted">Copy this text and keep it somewhere safe.</p><textarea rows="12" readonly>${esc(blob)}</textarea><div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">Done</button></div></div>`,true)}
 };
 function saveDraft(){const o=S.draft;
+  if(!o||!(o.items||[]).some(it=>lineQty(it)>0)){toast("Add at least one item with a quantity before saving");return false}
   const i=S.data.orders.findIndex(x=>x.id===o.id);const prev=i>=0?S.data.orders[i]:null;
   if(prev&&prev.deducted&&prev.kind==="sale"){
     if(o.kind==="job"||o.status==="cancelled"){restoreStock(prev);o.deducted=false}
@@ -839,7 +841,7 @@ function saveDraft(){const o=S.draft;
   }
   else if(o.kind==="sale"&&!o.deducted&&!["quote","cancelled"].includes(o.status))deductStock(o);
   const c=JSON.parse(JSON.stringify(o));delete c.saved;delete c.dirty;o.dirty=false;
-  if(i>=0)S.data.orders[i]=c;else{S.data.orders.push(c);S.data.seq=Math.max(S.data.seq,o.no)+1}o.saved=true;persist()}
+  if(i>=0)S.data.orders[i]=c;else{S.data.orders.push(c);S.data.seq=Math.max(S.data.seq,o.no)+1}o.saved=true;persist();return true}
 
 const CHANGE={
   lang(el){S.lang=el.value;try{localStorage.setItem("aara:lang",S.lang)}catch(e){}render()},
