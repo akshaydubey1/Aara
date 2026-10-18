@@ -374,6 +374,8 @@ function totals(o){
   const total=taxable+gst;
   return{sub,taxable,gst,total,balance:total-(+o.advance||0),cft:o.items.reduce((a,it)=>a+lineCft(it),0)};
 }
+function receivables(){return S.data.orders.reduce((a,o)=>["confirmed","cutting","delivered"].includes(o.status)?a+Math.max(0,totals(o).balance):a,0)}
+function monthSales(){const mo=today().slice(0,7);return S.data.orders.reduce((a,o)=>o.date&&o.date.slice(0,7)===mo&&!["quote","cancelled"].includes(o.status)?a+totals(o).total:a,0)}
 function stockCft(){return Object.values(S.data.stock).reduce((a,s)=>a+(+s.qty||0),0)}
 function stockValue(){return Object.values(S.data.stock).reduce((a,s)=>a+(+s.qty||0)*(+s.sell||0),0)}
 function lowStock(){return Object.entries(S.data.stock).filter(([k,s])=>(+s.min||0)>0&&(+s.qty||0)<=(+s.min||0))}
@@ -452,7 +454,7 @@ function viewHome(){
   ${backupDue?`<div class="banner warn"><b>Backup overdue.</b>&nbsp;Your mill data lives only in this browser. <button class="btn ghost sm" style="padding:0 4px;min-height:0" data-act="export">Export a copy</button> — it takes ten seconds.</div>`:""}
   <div class="kpis">
     <div class="card kpi"><p class="label">${t("stock")}</p><p class="v num">${fx(stockCft(),0)} <span style="font-size:15px">CFT</span></p><p class="s">Worth ${inr(stockValue())} at your selling rates</p></div>
-    <div class="card kpi"><p class="label">Open ${t("orders")}</p><p class="v num">${open.length}</p><p class="s">${inr(openVal)} incl. GST</p></div>
+    <div class="card kpi"><p class="label">Open ${t("orders")}</p><p class="v num">${open.length}</p><p class="s">${inr(openVal)} incl. GST${receivables()?` · ${inr(receivables())} to collect`:""}</p></div>
     <div class="card kpi"><p class="label">${t("labour")} ${t("present")}</p><p class="v num">${pres}<span style="font-size:18px" class="muted"> / ${lab.length}</span></p><p class="s"><button class="btn ghost sm" style="padding:0;min-height:0" data-act="tab" data-v="people" data-pt="labour">Mark attendance</button></p></div>
     <div class="card kpi"><p class="label">Next auction</p>${up[0]?`<p class="v num">${daysUntil(up[0].date)===0?"Today":daysUntil(up[0].date)+" days"}</p><p class="s">${esc(up[0].depot||up[0].org)}</p>`:`<p class="v">—</p><p class="s"><button class="btn ghost sm" style="padding:0;min-height:0" data-act="tab" data-v="auctions">Add one</button></p>`}</div>
   </div>
@@ -488,10 +490,10 @@ function viewPeople(){
     <div class="card"><p class="label">${t("present")} today</p><p class="kpi"><span class="v num">${lab.filter(p=>p.present[today()]).length}</span></p></div>
     <div class="card"><p class="label">Monthly wage bill (est.)</p><p class="kpi"><span class="v num">${inr(bill)}</span></p><p class="small muted">Daily wages × ${wd} days. Piece-rate not included.</p></div></div>
     <div class="row"><div style="width:170px"><input type="date" value="${day}" max="${today()}" data-act-change="aday" aria-label="Attendance date"></div><button class="btn sm" data-act="allPresent">Mark all ${t("present")}</button>${day!==today()?`<span class="pill p-warn">Marking for ${fdate(day)}</span>`:""}</div>`:""}
-  ${list.length?`<div class="tablewrap"><table><thead><tr><th>${t("name")}</th><th>${t("phone")}</th>${type==="labour"?`<th>${t("wage")}</th><th class="r">Days this month</th><th>${t("present")} ${day===today()?"today":fdate(day)}</th>`:`<th class="r">Share</th><th>Since</th>`}<th></th></tr></thead><tbody>
+  ${list.length?`<div class="tablewrap"><table><thead><tr><th>${t("name")}</th><th>${t("phone")}</th>${type==="labour"?`<th>${t("wage")}</th><th class="r">Days in ${new Date(day+"T00:00:00").toLocaleDateString("en-IN",{month:"short"})}</th><th class="r">Est. ₹ this month</th><th>${t("present")} ${day===today()?"today":fdate(day)}</th>`:`<th class="r">Share</th><th>Since</th>`}<th></th></tr></thead><tbody>
     ${list.map(p=>`<tr><td><div class="row" style="flex-wrap:nowrap"><div class="avatar">${esc(initials(p.name))}</div><div><b>${esc(p.name)}</b>${p.active?"":` <span class="pill p-neutral">Inactive</span>`}<div class="small muted">${esc(p.role||"")}</div></div></div></td>
       <td class="num">${esc(p.phone||"—")}</td>
-      ${type==="labour"?`<td class="num">${p.wageType==="piece"?inr(p.wage)+"/CFT":p.wageType==="monthly"?inr(p.wage)+"/mo":inr(p.wage)+"/day"}</td><td class="r num">${daysIn(p)}</td>
+      ${type==="labour"?`<td class="num">${p.wageType==="piece"?inr(p.wage)+"/CFT":p.wageType==="monthly"?inr(p.wage)+"/mo":inr(p.wage)+"/day"}</td><td class="r num">${daysIn(p)}</td><td class="r num">${p.wageType==="piece"?"—":inr(p.wageType==="monthly"?+p.wage||0:(+p.wage||0)*daysIn(p))}</td>
         <td><label class="check" style="align-items:center"><input type="checkbox" data-act-change="present" data-id="${p.id}" ${(p.present||{})[day]?"checked":""} ${p.active?"":"disabled"}><span>${(p.present||{})[day]?t("present"):"Absent"}</span></label></td>`
       :`<td class="r num">${+p.share||0}%</td><td>${fdate(p.joined)}</td>`}
       <td class="r"><div class="row" style="justify-content:flex-end;flex-wrap:nowrap"><button class="btn sm" data-act="editPerson" data-id="${p.id}">${t("edit")}</button><button class="btn sm danger" data-act="askDel" data-kind="person" data-id="${p.id}">${t("remove")}</button></div></td></tr>`).join("")}
@@ -598,6 +600,7 @@ function viewOrders(){
   const list=[...d.orders].filter(o=>f==="all"||(f==="open"?["quote","confirmed","cutting"].includes(o.status):["delivered","paid"].includes(o.status))).sort((a,b)=>b.no-a.no);
   return `<div class="topbar"><div><p class="label">Quotes, sales and job work</p><h1>${t("orders")}</h1></div><button class="btn primary" data-act="newOrder">+ ${t("newEstimate")}</button></div>
   <div class="tabs" role="tablist">${[["open","Open"],["done","Completed"],["all","All"]].map(([k,l])=>`<button role="tab" data-act="ofilter" data-v="${k}" aria-selected="${f===k}">${l}</button>`).join("")}</div>
+  ${(()=>{const rec=receivables(),ms=monthSales();return rec||ms?`<p class="small muted">${rec?inr(rec)+" to collect":""}${rec&&ms?" · ":""}${ms?inr(ms)+" sold this month":""}</p>`:""})()}
   ${list.length?`<div class="tablewrap"><table><thead><tr><th>No.</th><th>${t("customer")}</th><th>Type</th><th class="r">CFT</th><th class="r">${t("total")}</th><th class="r">Balance</th><th>Status</th><th></th></tr></thead><tbody>
   ${list.map(o=>{const tt=totals(o);return `<tr><td><span class="lot">${o.no}</span><div class="small muted">${fdate(o.date)}</div></td><td><b>${esc(o.customer||"Walk-in")}</b><div class="small muted num">${esc(o.phone||"")}</div></td><td>${o.kind==="job"?"Job work":"Timber sale"}</td>
     <td class="r num">${fx(tt.cft)}</td><td class="r num">${inr(tt.total)}</td><td class="r num">${inr(tt.balance)}</td><td><span class="pill ${STATUS[o.status][1]}">${STATUS[o.status][0]}</span></td>
@@ -616,10 +619,11 @@ function viewEstimate(){
   const stocked=Object.keys(d.stock);
   const woodOpts=[...(stocked.length?[["__s","— "+t("myStock")+" —"],...stocked.map(k=>[k,woodName(k)+" ("+fx(d.stock[k].qty,0)+" CFT)"])]:[]),["__a","— "+t("allWoods")+" —"],...WOODS.filter(w=>w[3]!=="RS"&&!stocked.includes(w[0])).map(w=>[w[0],w[1]]),...d.customWoods.filter(c=>!stocked.includes(c.id)).map(c=>[c.id,c.en])];
   return `<div class="topbar"><div><button class="btn ghost sm" data-act="tab" data-v="orders" style="padding-left:0">← ${t("orders")}</button><h1>${o.saved?"Order":"Estimate"} <span class="lot" style="font-size:18px">${o.no}</span></h1></div>
-    <div class="row"><span class="pill ${STATUS[o.status][1]}">${STATUS[o.status][0]}</span></div></div>
+    <div class="row">${o.saved?`<button class="btn sm" data-act="dupOrder">Duplicate</button>`:`<button class="btn sm danger" data-act="askDiscard">Discard</button>`}<span class="pill ${STATUS[o.status][1]}">${STATUS[o.status][0]}</span></div></div>
   <div class="card stack">
     <div class="grid g4">${inp("customer",t("customer"),o.customer,"text",'data-of="customer"')}${inp("phone",t("phone"),o.phone,"tel",'data-of="phone" inputmode="numeric" maxlength="10"')}${inp("date","Date",o.date,"date",'data-of="date"')}
       <label class="field"><span>Order type</span>${sel("kind",[["sale","Timber sale (from my stock)"],["job","Job work / chirai (customer's wood)"]],o.kind,'data-act-change="okind"')}</label></div>
+    <label class="field"><span>Notes / delivery terms (optional)</span><textarea name="notes" rows="2" data-of="notes" placeholder="e.g. Deliver to site gate 2; 15 days credit">${esc(o.notes||"")}</textarea></label>
     ${job?`<div class="banner">Job work: the customer brings their own logs. You charge only for sawing per CFT, and your stock is not touched.</div>`:""}
   </div>
   <div class="card stack"><div class="row between"><h2>Items</h2><button class="btn sm" data-act="addLine">+ Add item</button></div>
@@ -685,6 +689,7 @@ function quoteText(o){
   if(o.gstOn)L.push(`GST ${d.settings.gst}%: ${inr(tt.gst)}`);
   L.push(`*${t("total")}: ${inr(tt.total)}*`);
   if(+o.advance)L.push(`Advance: ${inr(o.advance)} · Balance: ${inr(tt.balance)}`);
+  if(o.notes)L.push("Note: "+o.notes);
   L.push("",o.kind==="job"?"Sawing charges only. Customer's own timber.":"Rates valid for 7 days, subject to stock.",`Contact: ${d.profile.mobile}`);
   return L.filter((x,i)=>x!==""||L[i-1]!=="").join("\n");
 }
@@ -783,7 +788,10 @@ const ACT={
     if(k==="account"){await Store.del("mill_"+S.acct);if(S.acct!=="demo"){delete S.accounts[S.acct];await Store.set("accounts",S.accounts)}ACT.logout();toast("Account deleted");return}
     persist();render();toast("Removed")},
   ofilter(el){S.orderFilter=el.dataset.v;render()},
-  newOrder(){S.draft={id:uid(),no:S.data.seq,date:today(),customer:"",phone:"",kind:"sale",items:[],transport:0,discount:0,advance:0,gstOn:true,status:"quote",deducted:false};S.draft.items=[blankItem("sale")];S.tab="estimate";render();window.scrollTo(0,0)},
+  newOrder(){S.draft={id:uid(),no:S.data.seq,date:today(),customer:"",phone:"",kind:"sale",items:[],transport:0,discount:0,advance:0,gstOn:true,status:"quote",deducted:false,notes:""};S.draft.items=[blankItem("sale")];S.tab="estimate";render();window.scrollTo(0,0)},
+  dupOrder(){const o=JSON.parse(JSON.stringify(S.draft));o.id=uid();o.no=S.data.seq;o.date=today();o.status="quote";o.deducted=false;o.saved=false;o.dirty=true;S.draft=o;render();toast("Duplicated as estimate #"+o.no)},
+  askDiscard(){openModal(`<div class="stack"><h2>Discard this estimate?</h2><p class="muted">Unsaved changes will be lost.</p><div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">${t("cancel")}</button><button class="btn danger" data-act="discardDraft">Discard</button></div></div>`)},
+  discardDraft(){S.draft=null;closeModal();S.tab="orders";render()},
   openOrder(el){S.draft=JSON.parse(JSON.stringify(S.data.orders.find(o=>o.id===el.dataset.id)));S.draft.saved=true;S.tab="estimate";render();window.scrollTo(0,0)},
   addLine(){S.draft.items.push(blankItem(S.draft.kind));S.draft.dirty=true;render()},
   delLine(el){S.draft.items.splice(+el.dataset.i,1);S.draft.dirty=true;render()},
@@ -844,7 +852,13 @@ document.addEventListener("input",e=>{const el=e.target;
   if(el.dataset.actInput){S[el.dataset.actInput]=el.value;const pos=el.selectionStart;render();const n=$("#"+el.id);if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return}
   if(el.dataset.li!==undefined){if(!S.draft||!S.draft.items[+el.dataset.li])return;S.draft.items[+el.dataset.li][el.dataset.k]=el.value===""?"":+el.value;S.draft.dirty=true;recalc();return}
   if(el.dataset.of){if(!S.draft)return;S.draft[el.dataset.of]=el.type==="number"?(+el.value||0):el.value;S.draft.dirty=true;recalc()}});
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("#modal").innerHTML)closeModal()});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&$("#modal").innerHTML)closeModal();
+  if(e.key!=="Tab")return;const md=document.querySelector("#modal .modal");if(!md)return;
+  const f=[...md.querySelectorAll("button,input,select,textarea,a[href]")].filter(x=>!x.disabled&&x.offsetParent!==null);
+  if(!f.length)return;const first=f[0],last=f[f.length-1];
+  if(e.shiftKey&&document.activeElement===first){last.focus();e.preventDefault()}
+  else if(!e.shiftKey&&document.activeElement===last){first.focus();e.preventDefault()}});
 window.addEventListener("beforeunload",e=>{if(S.draft&&S.draft.dirty){e.preventDefault();e.returnValue=""}});
 
 document.addEventListener("submit",async e=>{e.preventDefault();const form=e.target,kind=form.dataset.form;const fd=Object.fromEntries(new FormData(form));const d=S.data;

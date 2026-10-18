@@ -153,6 +153,31 @@ const test = `;(async () => {
   ok("quote text + legal + forms render",
      (ACT.newOrder(), quoteText(S.draft).length > 50) && legalHTML().length > 1000 &&
      personForm({ type: "labour", active: true }).length > 200 && stockForm("teak").length > 200 && auctionForm({}).length > 200);
+
+  // order notes land in the quote text
+  S.draft.notes = "Deliver to gate 2"; 
+  ok("notes appear in quote text", quoteText(S.draft).includes("Deliver to gate 2"));
+
+  // duplicate produces a fresh unsaved quote with the next number
+  S.draft.status = "confirmed"; saveDraft();
+  const srcId = S.draft.id, srcNo = S.draft.no;
+  ACT.dupOrder();
+  ok("duplicate makes a new quote", S.draft.id !== srcId && S.draft.no > srcNo &&
+     S.draft.saved === false && S.draft.status === "quote" && S.draft.deducted === false);
+
+  // discard clears an unsaved draft
+  ACT.discardDraft();
+  ok("discard clears the draft", S.draft === null && S.tab === "orders");
+
+  // receivables only count confirmed-ish orders with a balance
+  S.data.orders = [
+    { id: "o1", no: 1, date: today(), kind: "sale", status: "delivered", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 100, gstOn: false, deducted: true },
+    { id: "o2", no: 2, date: today(), kind: "sale", status: "quote", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
+    { id: "o3", no: 3, date: today(), kind: "sale", status: "cancelled", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
+  ];
+  const per = lineCft({ mode: "sawn", L: 7, W: 4, T: 2, pcs: 10 }) * 1000;
+  ok("receivables excludes quotes/cancelled", Math.abs(receivables() - (per - 100)) < 0.05);
+  ok("monthSales counts sold orders", Math.abs(monthSales() - per) < 0.05);
 })()`;
 
 const fn = new Function(
