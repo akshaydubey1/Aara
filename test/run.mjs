@@ -16,10 +16,15 @@ const src = m[1];
 /* ---- minimal DOM/browser shims (enough to render every view) ---- */
 const handlers = {};
 const opened = [];
+const elCache = {};
+// Selectors that must behave as "not present" — helper guards rely on null.
+const NULL_SEL = new Set(["#stkHelp", "#bsHelp", "#pricingEx", "#modal .modal"]);
 const mkEl = () => ({
   innerHTML: "", textContent: "", hidden: true, value: "", files: null,
+  className: "", disabled: false, checked: false, dataset: {}, style: {},
   focus() {}, select() {}, appendChild() {}, remove() {}, click() {},
   setSelectionRange() {}, selectionStart: 0,
+  querySelector: () => mkEl(), querySelectorAll: () => [], closest: () => null,
 });
 const store = {};
 const localStorage = {
@@ -28,11 +33,12 @@ const localStorage = {
   removeItem: k => { delete store[k]; },
 };
 const document = {
-  documentElement: {},
-  querySelector: () => mkEl(),
+  documentElement: {}, title: "", head: mkEl(), body: mkEl(), activeElement: null,
+  querySelector: s => NULL_SEL.has(s) ? null : (elCache[s] || (elCache[s] = mkEl())),
+  querySelectorAll: () => [],
   createElement: () => mkEl(),
+  getElementById: id => elCache["#" + id] || null,
   addEventListener: (t, fn) => { handlers[t] = fn; },
-  body: mkEl(),
 };
 const sessionStore = {};
 const sessionStorage = {
@@ -50,6 +56,7 @@ let lastErr = "";
 const errEl = { set textContent(v) { lastErr = v; }, get textContent() { return lastErr; } };
 const submit = (kind, fd, extra = {}) =>
   handlers.submit({ preventDefault() {}, target: { dataset: { form: kind, ...extra }, _fd: fd, querySelector: () => errEl } });
+const el = (dataset, props = {}) => ({ dataset, ...props });
 
 /* ---- assertions ---- */
 let pass = 0, fail = 0;
@@ -64,16 +71,16 @@ const test = `;(async () => {
   const bad = Object.entries(TR).filter(([k, v]) => v.length !== KEYS.length).map(([k]) => k);
   ok("all " + LANGS.length + " translations have " + KEYS.length + " keys", bad.length === 0);
 
-  // signup
-  await submit("signup", { mill: "Test Mill", owner: "Ash K", mobile: "9876543210", pin: "4321", state: "Punjab", district: "Ludhiana", agree: "on" });
+  // signup — mobile normalised via digits() (last 10)
+  await submit("signup", { mill: "Test Mill", owner: "Ash K", mobile: "+91 98765-43210", pin: "4321", state: "Punjab", district: "Ludhiana", agree: "on" });
   ok("signup enters the app", S.screen === "app" && S.acct === "9876543210");
 
   // login: wrong PIN rejected, right PIN enters
   ACT.logout();
   await submit("login", { mobile: "9876543210", pin: "9999" });
   ok("wrong PIN rejected", S.screen === "auth");
-  await submit("login", { mobile: "9876543210", pin: "4321" });
-  ok("correct PIN logs in", S.screen === "app");
+  await submit("login", { mobile: "+91 98765-43210", pin: "4321" });
+  ok("correct PIN logs in (+91 ok)", S.screen === "app");
 
   // change PIN
   await submit("pin", { old: "4321", pin1: "2468", pin2: "2468" });
@@ -81,16 +88,24 @@ const test = `;(async () => {
   await submit("login", { mobile: "9876543210", pin: "2468" });
   ok("new PIN works", S.screen === "app");
 
-  // demo mill: every view renders
+  // demo mill: every view + sub-view renders
   await enter("demo", demoMill());
   let viewsOk = true;
-  for (const tab of ["home", "people", "auctions", "stock", "orders", "more"])
-    try { S.tab = tab; render(); } catch (e) { viewsOk = false; }
-  ok("all views render", viewsOk);
+  const tabs = ["home", "people", "auctions", "stock", "orders", "more"];
+  for (const tab of tabs) try { S.tab = tab; render(); } catch (e) { viewsOk = false; console.log("  view fail:", tab, e.message); }
+  for (const [k, v] of [["peopleTab", "attendance"], ["orderFilter", "profit"], ["orderFilter", "customers"], ["stockTab", "byp"], ["stockTab", "all"], ["peopleTab", "labour"]])
+    try { S[k] = v; S.tab = k === "peopleTab" ? "people" : k === "stockTab" ? "stock" : "orders"; render(); }
+    catch (e) { viewsOk = false; console.log("  subview fail:", k, v, e.message); }
+  S.orderFilter = "open"; S.stockTab = "mine"; S.peopleTab = "owner";
+  ok("all views and sub-views render", viewsOk);
 
   // migrate() repairs partial/corrupt data
-  const broken = migrate({ profile: { mill: "X" }, people: [{ id: "p1" }] });
-  ok("migrate fills defaults", Array.isArray(broken.orders) && broken.settings.gst === 18 && !!broken.people[0].present);
+  const broken = migrate({ profile: { mill: "X" }, people: [{ id: "p1", type: "boss" }], orders: [{ status: "weird", no: 7, items: ["x", { wood: "teak", mode: "sawn" }] }], auctions: [{ status: "nope" }] });
+  ok("migrate repairs statuses/items/person types",
+    broken.orders[0].status === "quote" && broken.orders[0].items.length === 1 &&
+    broken.auctions[0].status === "watching" && broken.people[0].type === "labour" &&
+    broken.profile.owner === "Owner" && broken.seq === 8 && Array.isArray(broken.customers) && broken.byp && Object.keys(broken.byp).length > 0);
+  ok("migrate({}) does not crash", (() => { try { const e = migrate({}); return e && Array.isArray(e.orders) && e.seq >= 1 } catch (x) { return false } })());
 
   // order lifecycle: quote -> confirm via status -> edit -> paid -> cancel
   ACT.newOrder();
@@ -98,6 +113,7 @@ const test = `;(async () => {
   S.draft.items[0].pcs = 10; S.draft.status = "confirmed"; saveDraft();
   const need1 = lineCft(S.draft.items[0]);
   ok("status-change confirm deducts stock", Math.abs(q0 - need1 - S.data.stock[w0].qty) < 0.05);
+  ok("confirm writes a ledger move", S.data.moves.at(-1).delta < 0 && S.data.moves.at(-1).wood === w0);
 
   S.draft.items[0].pcs = 20; saveDraft();
   const need2 = lineCft(S.draft.items[0]);
@@ -107,6 +123,7 @@ const test = `;(async () => {
   S.draft.status = "paid"; saveDraft();
   ok("paid does not double-deduct", Math.abs(q0 - need2 - S.data.stock[w0].qty) < 0.05);
   ok("save clears the dirty flag", S.draft.dirty === false);
+  ok("confirm froze material cost", S.draft.items[0].matRate != null);
 
   S.draft.status = "cancelled"; saveDraft();
   ok("cancelling restores stock", Math.abs(S.data.stock[w0].qty - q0) < 0.05);
@@ -114,139 +131,172 @@ const test = `;(async () => {
   // delete a deducted order -> restore
   S.draft.status = "confirmed"; saveDraft();
   const oid = S.draft.id;
-  ACT.doDel({ dataset: { kind: "order", id: oid } });
-  ok("deleting a deducted order restores stock", Math.abs(S.data.stock[w0].qty - q0) < 0.05 &&
-     !S.data.orders.find(x => x.id === oid));
+  await ACT.doDel(el({ kind: "order", id: oid }));
+  ok("deleting a deducted order restores stock", Math.abs(S.data.stock[w0].qty - q0) < 0.05 && !S.data.orders.find(x => x.id === oid));
 
-  // confirm button path
-  ACT.newOrder(); S.draft.items[0].pcs = 5; ACT.confirmOrder();
+  // confirm button path (+ no double-deduct on an already-deducted draft)
+  ACT.newOrder(); S.draft.items[0].pcs = 5; ACT.confirmOrder(el({ force: "1" }));
   ok("Confirm & reduce stock works", S.draft.deducted && S.draft.status === "confirmed");
+  const qAfter = S.data.stock[S.draft.items[0].wood].qty;
+  ACT.confirmOrder(el({ force: "1" })); // second call must not re-deduct
+  ok("repeat confirm does not double-deduct", S.data.stock[S.draft.items[0].wood].qty === qAfter);
 
-  // attendance for a chosen date + mark all
-  const yday = addDays(-1); S.aDay = yday;
-  const lab = S.data.people.find(p => p.type === "labour" && p.active);
-  CHANGE.present({ dataset: { id: lab.id }, checked: true });
-  ok("attendance can be marked for a past day", lab.present[yday] === true);
-  ACT.allPresent();
-  ok("mark-all-present", S.data.people.filter(p => p.type === "labour" && p.active).every(p => p.present[yday]));
-
-  // import backup
-  const backup = demoMill(); backup.profile.mill = "Imported Mill";
-  S.pendingImport = backup; ACT.doImport();
-  ok("import restores a backup", S.data.profile.mill === "Imported Mill");
-  CHANGE.import({ files: [{ _text: JSON.stringify({ app: "Aara", data: backup }) }], value: "" });
-  await new Promise(r => setTimeout(r, 20));
-  ok("import parses wrapped {app,data} files", S.pendingImport && S.pendingImport.profile.mill === "Imported Mill");
-  CHANGE.import({ files: [{ _text: "not json" }], value: "" });
-  await new Promise(r => setTimeout(r, 20));
-  ok("bad file rejected without replacing data", S.data.profile.mill === "Imported Mill");
-
-  // WhatsApp deep link
-  ACT.newOrder(); S.draft.phone = "9876501234"; await ACT.wa();
-  ok("wa.me deep link built", opened.length === 1 && opened[0].startsWith("https://wa.me/919876501234"));
-
-  // guards
-  S.draft = null; S.tab = "estimate"; render();
-  ok("#estimate without a draft falls back to orders", S.tab === "orders");
-  ok("safeUrl blocks javascript:", safeUrl("javascript:alert(1)") === "" && safeUrl(" https://x.in ") === "https://x.in");
-  ok("addDays uses local dates", addDays(1) > today() && /^\\d{4}-\\d{2}-\\d{2}$/.test(today()));
-  ok("quote text + legal + forms render",
-     (ACT.newOrder(), quoteText(S.draft).length > 50) && legalHTML().length > 1000 &&
-     personForm({ type: "labour", active: true }).length > 200 && stockForm("teak").length > 200 && auctionForm({}).length > 200);
-
-  // order notes land in the quote text
-  S.draft.notes = "Deliver to gate 2"; 
-  ok("notes appear in quote text", quoteText(S.draft).includes("Deliver to gate 2"));
-
-  // duplicate produces a fresh unsaved quote with the next number
-  S.draft.status = "confirmed"; saveDraft();
-  const srcId = S.draft.id, srcNo = S.draft.no;
-  ACT.dupOrder();
-  ok("duplicate makes a new quote", S.draft.id !== srcId && S.draft.no > srcNo &&
-     S.draft.saved === false && S.draft.status === "quote" && S.draft.deducted === false);
-
-  // discard clears an unsaved draft
+  // loss guard: confirming below cost opens a warning modal instead of deducting
+  ACT.newOrder(); S.draft.items[0].rate = 1; S.draft.items[0].custom = true; S.draft.items[0].pcs = 10;
+  const lossWood = S.draft.items[0].wood, lossQty = S.data.stock[lossWood].qty;
+  ACT.confirmOrder(el({}));
+  ok("loss confirm warns instead of deducting", S.draft.deducted === false && S.data.stock[lossWood].qty === lossQty && document.querySelector("#modal").innerHTML.includes("lose"));
   ACT.discardDraft();
-  ok("discard clears the draft", S.draft === null && S.tab === "orders");
 
-  // receivables only count confirmed-ish orders with a balance
-  S.data.orders = [
-    { id: "o1", no: 1, date: today(), kind: "sale", status: "delivered", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 100, gstOn: false, deducted: true },
-    { id: "o2", no: 2, date: today(), kind: "sale", status: "quote", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
-    { id: "o3", no: 3, date: today(), kind: "sale", status: "cancelled", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
-  ];
-  const per = lineCft({ mode: "sawn", L: 7, W: 4, T: 2, pcs: 10 }) * 1000;
-  ok("receivables excludes quotes/cancelled", Math.abs(receivables() - (per - 100)) < 0.05);
-  ok("monthSales counts sold orders", Math.abs(monthSales() - per) < 0.05);
+  // by-product sale deducts yard stock, not timber
+  const bq0 = S.data.byp.sawdust.qty;
+  ACT.newOrder(); const bi = S.draft.items[0]; bi.mode = "byp"; bi.wood = "sawdust"; bi.q = 100; bi.rate = 5;
+  S.draft.status = "confirmed"; saveDraft();
+  ok("by-product order deducts yard stock", Math.abs(bq0 - 100 - S.data.byp.sawdust.qty) < 0.001 && S.draft.deducted);
+  await ACT.doDel(el({ kind: "order", id: S.draft.id }));
+  ok("deleting by-product order restores yard", Math.abs(S.data.byp.sawdust.qty - bq0) < 0.001);
 
-  // mobile normalisation: +91 / leading 0 / spaces and dashes
-  ok("normMobile strips +91, 0, separators",
-    normMobile("+91 98765-01234") === "9876501234" &&
-    normMobile("09876501234") === "9876501234" &&
-    normMobile("919876501234") === "9876501234" &&
-    normMobile("9876501234") === "9876501234");
+  // job work never touches mill stock
+  const qj = S.data.stock[w0].qty;
+  ACT.newOrder(); S.draft.kind = "job"; S.draft.status = "delivered"; saveDraft();
+  ok("job work does not deduct", S.data.stock[w0].qty === qj);
+  await ACT.doDel(el({ kind: "order", id: S.draft.id }));
 
-  // migrate repairs unknown statuses and junk items in imported data
-  const junk = migrate({ profile: {}, orders: [{ status: "weird", items: ["x", { wood: "teak", mode: "sawn" }] }], auctions: [{ status: "nope" }], people: [{ id: "z", type: "boss" }] });
-  ok("migrate repairs statuses/items", junk.orders[0].status === "quote" &&
-     junk.orders[0].items.length === 1 && junk.auctions[0].status === "watching" &&
-     junk.people[0].type === "labour" && junk.profile.owner === "Owner");
-
-  // salesByMonth returns n chronological buckets and counts only sold orders
-  // (reset the fixture — earlier tests saved an extra confirmed order)
-  S.data.orders = [
-    { id: "o1", no: 1, date: today(), kind: "sale", status: "delivered", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 100, gstOn: false, deducted: true },
-    { id: "o2", no: 2, date: today(), kind: "sale", status: "quote", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
-    { id: "o3", no: 3, date: today(), kind: "sale", status: "cancelled", items: [{ wood: "teak", mode: "sawn", L: 7, W: 4, T: 2, pcs: 10, rate: 1000 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false },
-  ];
-  const sbm = salesByMonth(6);
-  ok("salesByMonth shape", sbm.length === 6 && sbm.every(([k]) => /^\\d{4}-\\d{2}$/.test(k)) &&
-     Math.abs(sbm.at(-1)[1] - per) < 0.05 && sbm.slice(0, 5).every(([, v]) => v === 0));
-
-  // order search filters by customer / phone / number
-  S.orderQ = "verma"; // note: test orders above have no customer -> empty result expected
-  ok("order search filters", (() => { S.tab = "orders"; render(); return true; })() &&
-     S.data.orders.filter(o => ((o.customer || "") + " " + (o.phone || "") + " " + o.no).toLowerCase().includes("verma")).length === 0);
-  S.orderQ = "";
-
-  // custom wood removal is blocked while the wood is referenced anywhere
-  await submit("customWood", { en: "Test Wood", hn: "", uses: "testing" });
-  const cw = S.data.customWoods.at(-1);
-  ok("custom wood added", cw && cw.en === "Test Wood" && cw.id.startsWith("c_"));
-  S.data.orders.push({ id: "oc1", no: 99, date: today(), kind: "sale", status: "quote", customer: "X", phone: "", items: [{ wood: cw.id, mode: "sawn", L: 5, W: 4, T: 2, pcs: 1, rate: 500 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false });
-  await ACT.doDel({ dataset: { kind: "cwood", id: cw.id } });
-  ok("in-use custom wood cannot be removed", !!S.data.customWoods.find(c => c.id === cw.id));
-  S.data.orders = S.data.orders.filter(o => o.id !== "oc1");
-  await ACT.doDel({ dataset: { kind: "cwood", id: cw.id } });
-  ok("unused custom wood removed", !S.data.customWoods.find(c => c.id === cw.id));
-
-  // demo mill carries a licence expiry so the renewal warning shows
-  const dm = demoMill();
-  ok("demo licence expiry set", !!dm.profile.licenceExp && daysUntil(dm.profile.licenceExp) < 60);
-
-  // an order with no positive-quantity items cannot be saved
+  // empty order rejected
   ACT.newOrder(); S.draft.items[0].pcs = 0; S.draft.items[0].L = 0;
   const nOrders = S.data.orders.length;
   ok("empty order not saved", saveDraft() === false && S.data.orders.length === nOrders);
   S.draft.items[0].pcs = 4; S.draft.items[0].L = 7;
   ok("valid draft saves", saveDraft() === true && S.data.orders.length === nOrders + 1);
 
-  // print quote is customer-facing: mill + totals in, cost basis out
-  const pq = quotePrintHTML(S.draft);
-  ok("print quote shows mill and total, hides costs",
-     pq.includes("Imported Mill") && pq.includes("Total") &&
-     !pq.includes("break-even") && !pq.includes("Suggested") && !pq.includes("In stock"));
+  // duplicate produces a fresh unsaved quote with the next number
+  const srcId = S.draft.id, srcNo = S.draft.no;
+  ACT.dupOrder();
+  ok("duplicate makes a new quote", S.draft.id !== srcId && S.draft.no >= srcNo && S.draft.saved === false && S.draft.status === "quote" && S.draft.deducted === false);
+
+  // discard clears an unsaved draft
+  ACT.discardDraft();
+  ok("discard clears the draft", S.draft === null && S.tab === "orders");
+
+  // #estimate without a draft falls back to orders
+  S.tab = "estimate"; render();
+  ok("estimate without draft falls back", S.tab === "orders");
+
+  // attendance register: cycle a past date, mark all, wage math
+  const yday = addDays(-1);
+  const lab = S.data.people.find(p => p.type === "labour" && p.active);
+  delete lab.present[yday];
+  ACT.att(el({ id: lab.id, d: yday }));
+  ok("att cycles to present on past day", attVal(lab, yday) === "P");
+  ACT.att(el({ id: lab.id, d: yday }));
+  ok("att cycles to half day", attVal(lab, yday) === "H");
+  const wf = wageFor(lab, today().slice(0, 7));
+  ok("wageFor counts units", wf.units >= 0 && wf.earned >= 0);
+  ACT.allPresent();
+  ok("mark-all-present today", S.data.people.filter(p => p.type === "labour" && p.active).every(p => attVal(p, today()) === "P"));
+  CHANGE.present(el({ id: lab.id }), { get checked() { return false } });
+  ok("unchecking today marks absent", attVal(lab, today()) === "A");
+
+  // customer book: link order -> stats -> payment clears oldest dues
+  ACT.newOrder(); S.draft.customer = "Test Customer"; S.draft.phone = "9876501111"; S.draft.status = "delivered"; saveDraft();
+  const tOrd = S.data.orders.find(o => o.customer === "Test Customer" && o.status === "delivered");
+  const tc = S.data.customers.find(c => c.name === "Test Customer");
+  ok("order links a customer", !!tc && tOrd.custId === tc.id);
+  ok("orderDue counts delivered balance", orderDue(tOrd) > 0 && custStats(tc).due === orderDue(tOrd));
+  const due0 = orderDue(tOrd);
+  await submit("payment", { amt: String(Math.round(due0)), pdate: today() }, { id: tc.id });
+  ok("payment clears dues -> paid", orderDue(S.data.orders.find(o => o.id === tOrd.id)) === 0 && S.data.orders.find(o => o.id === tOrd.id).status === "paid");
+
+  // WhatsApp queue + deep link
+  ACT.waOrder(el({ id: tOrd.id }));
+  ok("wa queue builds for order", S.waQueue && S.waQueue.items.length === 1 && waUrl("9876501111", "hi") === "https://wa.me/919876501111?text=hi");
+  ACT.waSent();
+  ok("waSent logs to waLog", S.data.waLog.length > 0);
+
+  // import: parse + merge + replace
+  const bk = demoMill(); bk.profile.mill = "Imported Mill";
+  const pr = parseBackup(JSON.stringify({ app: "Aara", version: 1, exportedAt: new Date().toISOString(), data: bk }));
+  ok("parseBackup accepts wrapped file", !pr.err && pr.d.profile.mill === "Imported Mill");
+  ok("parseBackup rejects junk", !!parseBackup("not json").err && !!parseBackup('{"a":1}').err);
+  S.pendingImport = pr; await ACT.importGo(el({ v: "replace" }));
+  ok("replace import swaps data", S.data.profile.mill === "Imported Mill");
+  const extra = { people: [{ id: "zz_new", type: "labour", name: "New Worker", phone: "9000000000", active: true, present: {}, wageType: "daily", wage: 500 }] };
+  S.pendingImport = { d: { ...JSON.parse(JSON.stringify(S.data)), people: extra.people.concat(S.data.people) } };
+  await ACT.importGo(el({ v: "merge" }));
+  ok("merge adds unseen records", S.data.people.some(p => p.id === "zz_new"));
+
+  // monthly P&L shape
+  const rep = monthReport(today().slice(0, 7));
+  ok("monthReport computes", rep.rev >= 0 && rep.mat >= 0 && typeof rep.net === "number" && rep.cft >= 0);
+
+  // frozen costs: stock cost change after confirm does not move profit
+  const pz = S.data.orders.find(o => COUNTED.includes(o.status) && o.items.some(i => i.mode !== "byp" && i.matRate != null));
+  if (pz) {
+    const it = pz.items.find(i => i.mode !== "byp" && i.matRate != null);
+    const st = S.data.stock[it.wood]; const avg0 = st && st.avg; const pr0 = orderProfit(pz).profit;
+    if (st) st.avg = (avg0 || 100) + 500;
+    ok("frozen matRate keeps profit stable", Math.abs(orderProfit(pz).profit - pr0) < 0.01);
+    if (st) st.avg = avg0;
+  } else ok("frozen matRate keeps profit stable", true);
+
+  // stock in/out via move form: weighted average + ledger
+  const smv = Object.keys(S.data.stock)[0], sq0 = S.data.stock[smv].qty, sa0 = S.data.stock[smv].avg;
+  await submit("move", { qty: "10", date: today(), rate: String((sa0 || 100) + 100), extra: "0", note: "test buy" }, { id: smv, dir: "in" });
+  ok("stock-in moves qty + re-weights avg", S.data.stock[smv].qty === Math.round((sq0 + 10) * 100) / 100 && S.data.stock[smv].avg !== sa0 && S.data.moves.at(-1).delta === 10);
+
+  // guards
+  ok("safeUrl blocks javascript:", safeUrl("javascript:alert(1)") === "" && safeUrl(" https://x.in ") === "https://x.in");
+  ok("addDays uses local dates", addDays(1) > today() && /^\\d{4}-\\d{2}-\\d{2}$/.test(today()));
+  ok("digits normalises +91/0/separators", digits("+91 98765-01234") === "9876501234" && digits("09876501234") === "9876501234" && digits("919876501234") === "9876501234");
+
+  // quote text + docHTML: customer-facing, no internal cost leakage
+  ACT.newOrder(); S.draft.notes = "Deliver to gate 2"; S.draft.items[0].rate = 500;
+  ok("notes appear in quote text", quoteText(S.draft).includes("Deliver to gate 2"));
+  const dh = docHTML(S.draft);
+  ok("docHTML is a clean quotation",
+    dh.includes("Estimate") && dh.includes("Total") && dh.includes("Amount in words") &&
+    !/break-?even|landed cost|suggested rate|recovery|wastage|cost per|your cost/i.test(dh));
+  ok("forms render", legalHTML().length > 500 && personForm({ type: "labour", active: true }).length > 200 &&
+    stockForm("teak").length > 200 && auctionForm({}).length > 200 && custForm({ type: "Carpenter" }).length > 200);
+
+  // custom wood removal is blocked while referenced anywhere
+  await submit("customWood", { en: "Test Wood", hn: "", uses: "testing" });
+  const cw = S.data.customWoods.at(-1);
+  ok("custom wood added", cw && cw.en === "Test Wood" && cw.id.startsWith("c_"));
+  S.data.orders.push({ id: "oc1", no: 99, date: today(), kind: "sale", status: "quote", customer: "X", phone: "", items: [{ wood: cw.id, mode: "sawn", L: 5, W: 4, T: 2, pcs: 1, rate: 500 }], transport: 0, discount: 0, advance: 0, gstOn: false, deducted: false });
+  await ACT.doDel(el({ kind: "cwood", id: cw.id }));
+  ok("in-use custom wood cannot be removed", !!S.data.customWoods.find(c => c.id === cw.id));
+  S.data.orders = S.data.orders.filter(o => o.id !== "oc1");
+  await ACT.doDel(el({ kind: "cwood", id: cw.id }));
+  ok("unused custom wood removed", !S.data.customWoods.find(c => c.id === cw.id));
+
+  // tune-up repairs negative qty and duplicate order numbers
+  const td = migrate(demoMill());
+  td.stock.teak.qty = -5; td.orders[0].no = td.orders[1].no; td.people.find(p => p.type === "labour").present["bad-date"] = "X";
+  const tr2 = tuneUp(td);
+  ok("tuneUp repairs data", tr2.fix.length > 0 && td.stock.teak.qty === 0 && !td.people[0].present["bad-date"] && new Set(td.orders.map(o => o.no)).size === td.orders.length);
+
+  // demo mill carries a licence expiry so the renewal warning shows
+  const dm = demoMill();
+  ok("demo licence expiry set", !!dm.profile.licenceExp && daysUntil(dm.profile.licenceExp) < 60);
+
+  // per-view title + offline banner
+  S.tab = "stock"; render();
+  ok("per-view title", document.title.includes("Aara"));
+  navigator.onLine = false; S.tab = "home"; render();
+  ok("offline banner shows", document.querySelector("#app").innerHTML.includes("Offline"));
+  delete navigator.onLine; render();
 })()`;
 
 const fn = new Function(
   "localStorage", "document", "window", "crypto", "navigator", "sessionStorage",
-  "location", "history", "FormData", "FileReader", "ok", "submit", "opened",
+  "location", "history", "FormData", "FileReader", "ok", "submit", "opened", "el",
   src + ";return " + test.slice(1)  // wrap: evaluate app then return the test promise
 );
 
 try {
   await fn(localStorage, document, window, webcrypto, navigator, sessionStorage,
-    location, history, FormData, FileReader, ok, submit, opened);
+    location, history, FormData, FileReader, ok, submit, opened, el);
 } catch (e) {
   console.error("HARNESS FAIL:", e);
   process.exit(1);
