@@ -5,13 +5,13 @@ _Prepared 18 Oct 2026. The working prototype is the "Aara Sawmill Manager" artif
 ## 1. What the prototype does today
 | Section | Features |
 |---|---|
-| Login / Sign up | Mobile + 4–6 digit PIN (hashed), mill name, owner, state, district, WBI licence no., GSTIN validation. Separate, unbundled consents: Terms & Privacy (required) and WhatsApp/SMS alerts (optional). Sample mill for demos. |
+| Login / Sign up | Mobile + 4–6 digit PIN (salted hash), mill name, owner, state, district, WBI licence no., GSTIN validation. Separate, unbundled consents: Terms & Privacy (required) and WhatsApp/SMS alerts (optional). Change-PIN and 5-attempt lockout. Sample mill for demos. |
 | Terms & Privacy | Draft Terms of Use + DPDP Act 2023 privacy notice (needs lawyer review; fill company name, grievance officer). |
-| People | Owners, co-owners (share %, PAN; warns if shares ≠ 100%), labour (role, daily / monthly / piece-rate wage, ESIC/UAN, last 4 of Aadhaar only, worker consent tick). Add, edit, remove, active/inactive, daily attendance, monthly wage-bill estimate. |
+| People | Owners, co-owners (share %, PAN; warns if shares ≠ 100%), labour (role, daily / monthly / piece-rate wage, ESIC/UAN, last 4 of Aadhaar only, worker consent tick). Add, edit, remove, active/inactive, attendance for today or any past day, mark-all-present, monthly wage-bill estimate. |
 | Auctions | Directory of 10 timber sale sources (HP, J&K, MP, Maharashtra, Kerala, AP, Haryana, UP, WB forest corporations + Kandla hub) with how each auction works and official links. Personal auction diary with status (Watching → Registered → EMD paid → Won/Lost → Lifted), countdowns, EMD. "Before you bid" checklist. |
 | Stock | 48 species (Indian hardwood, conifer, plantation, imported, restricted) with Hindi names, uses and indicative ₹/CFT. Tick what you stock; logs vs sawn; buy/sell rates; low-stock alerts; stock in/out ledger; custom woods. |
-| Orders & estimates | CFT by sawn size (L ft × W in × T in ÷ 144), round log (Hoppus quarter-girth or true volume) or running feet. Timber sale vs job work (chirai). Suggested rate = (buy + wastage + sawing + labour) × (1 + margin), break-even warning, stock check. Transport, discount, GST 18% (CGST+SGST or IGST), advance, balance. Confirm reduces stock. WhatsApp-ready quote text. |
-| Settings | Mill profile, licence expiry alert, pricing defaults, 13 languages (EN, HI, MR, GU, PA, BN, TA, TE, KN, ML, OR, AS, UR with RTL), JSON backup, delete account. |
+| Orders & estimates | CFT by sawn size (L ft × W in × T in ÷ 144), round log (Hoppus quarter-girth or true volume) or running feet. Timber sale vs job work (chirai). Suggested rate = (buy + wastage + sawing + labour) × (1 + margin), break-even warning, stock check. Transport, discount, GST 18% (CGST+SGST or IGST), advance, balance. Stock ledger stays honest: confirm deducts, editing re-balances by per-wood delta, cancel/delete restores, shortfall warns by name. WhatsApp deep link or copy, print/PDF. Unsaved-draft warning. |
+| Settings | Mill profile, licence expiry alert, pricing defaults, 13 languages (EN, HI, MR, GU, PA, BN, TA, TE, KN, ML, OR, AS, UR with RTL), JSON backup export **and** import (validated, previewed before replace), change PIN, delete account. |
 
 ## 2. Research findings used
 - **GST**: logs (HSN 4403) and sawn timber (HSN 4407) at 18% from 22 Sep 2025; firewood (4401) exempt.

@@ -24,11 +24,19 @@ python3 -m http.server 8000
 
 Serve over `http://` or `https://` (not `file://`) so the service worker and offline mode work.
 
+Run the test suite (no dependencies, DOM-shimmed):
+
+```bash
+node test/run.mjs   # or: npm test
+```
+
 ## Files
 
 - `index.html` — the whole app (markup, styles and logic; no build step)
-- `sw.js` — service worker (offline cache)
+- `sw.js` — service worker (offline cache, including fonts)
 - `manifest.webmanifest`, `icon.svg`, `icon-192.png`, `icon-512.png`, `apple-touch-icon.png` — installable PWA bits
+- `test/run.mjs` — smoke + logic tests that drive the real app functions
+- `.github/workflows/test.yml` — CI gate on every push
 - `docs/blueprint.md` — research notes and the recommended production stack
 
 To publish, enable **GitHub Pages** (Settings → Pages → Deploy from branch → `main` / root).
