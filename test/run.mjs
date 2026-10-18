@@ -491,6 +491,9 @@ const test = `;(async () => {
   net.down = false;
   const upBoot = await A.boot(Store);
   ok("reconnect restores cloud + pushes offline write", upBoot === "cloud" && serverRows.get("u1|offlinekey") && serverRows.get("u1|offlinekey").v.a === 1);
+  // offline restart: records saved under the mill scope are still found
+  const fs = Store.findScope("9999999999");
+  ok("offline login finds mill-scope data", !!fs && !!(await Store.getMill(fs)));
   // revoked session: refresh fails -> clears session, degrades to device
   net.revoked = true;
   await A.pullAll().catch(() => {});

@@ -456,6 +456,14 @@ Store.delMill=async function(sc){
     if(p&&p[2].startsWith(sc+"_"))ks.add(k)}}catch(e){}
   for(const k of ks)await this.del(k);
 };
+/* Offline logins happen in device mode, so the account scope may not match
+   where the data actually lives (a phone that synced writes under the mill
+   id). Find whichever mill scope this device holds. */
+Store.findScope=function(acct){
+  try{if(localStorage.getItem("aara:idx_"+acct)||localStorage.getItem("aara:mill_"+acct))return acct;
+    for(let i=0;i<localStorage.length;i++){const m=(localStorage.key(i)||"").match(/^aara:(?:idx|mill)_(.+)$/);if(m)return m[1]}}catch(e){}
+  return acct;
+};
 Store.setMany=async function(kvs){const t=Date.now();let ok=true;
   for(const [k,v] of kvs){try{if(v===null)localStorage.removeItem("aara:"+k);else localStorage.setItem("aara:"+k,JSON.stringify(v));localStorage.setItem("aarat:"+k,String(t))}catch(e){ok=false}}
   if(!ok)toast("Could not save — browser storage may be full. Export a backup from More.");
@@ -1743,7 +1751,7 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
       if(rec.n>=5){rec.until=Date.now()+5*6e4;rec.n=0}else rec.until=0;
       await Store.set("fail_"+mob,rec);return err("Wrong PIN. Try again."+(rec.n?" "+(5-rec.n)+" tries left.":""))}
     if(rec.n||rec.until)await Store.del("fail_"+mob);
-    const m=await Store.getMill(scope(mob));if(!m)return err("Account found but mill data is missing on this device.");return enter(mob,m)}
+    const m=await Store.getMill(Store.findScope(S.mode==="cloud"&&window.AaraSync&&window.AaraSync.millId()?window.AaraSync.millId():mob));if(!m)return err("Account found but mill data is missing on this device.");return enter(mob,m)}
   if(kind==="pin"){await loadAccounts();const a=S.accounts[S.acct];
     if(!a)return err("PIN can only be changed on your own account.");
     if(await hashPin(fd.old||"",a.salt)!==a.hash)return err("Current PIN is wrong.");
@@ -1833,7 +1841,7 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
   await Store.init();
   await loadAccounts();
   let sess=null;try{sess=sessionStorage.getItem("aara:session")}catch(e){}
-  if(sess){const m=await Store.getMill(scope(sess));if(m){S.acct=sess;S.data=migrate(m);S.screen="app";
+  if(sess){const m=await Store.getMill(Store.findScope(scope(sess)));if(m){S.acct=sess;S.data=migrate(m);S.screen="app";
     const h=(location.hash||"").slice(1);if(["people","auctions","stock","orders","more"].includes(h))S.tab=h;render();autoBackup().catch(()=>{});return}}
   const h0=(location.hash||"").slice(1);
   if(h0==="demo"||h0.startsWith("demo/")){
