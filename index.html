@@ -185,6 +185,7 @@ td.r,th.r{text-align:right}
 <div id="app"></div>
 <div id="modal"></div>
 <div id="toast" hidden class="toast" role="status"></div>
+<noscript><p style="padding:24px;font-family:system-ui,sans-serif">Aara needs JavaScript to run. Please enable it and reload.</p></noscript>
 
 <script>
 /* ============ i18n ============ */
@@ -307,6 +308,7 @@ const addDays=n=>{const d=new Date();d.setDate(d.getDate()+n);return fmtDate(d)}
 const daysUntil=ds=>Math.round((new Date(ds+"T00:00:00")-new Date(today()+"T00:00:00"))/864e5);
 const fdate=ds=>ds?new Date(ds+"T00:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}):"—";
 const initials=n=>(n||"?").split(/\s+/).map(x=>x[0]).slice(0,2).join("").toUpperCase();
+const normMobile=s=>{s=String(s||"").replace(/\D/g,"");if(s.length===12&&s.startsWith("91"))return s.slice(2);if(s.length===11&&s.startsWith("0"))return s.slice(1);return s};
 const woodName=id=>{const w=W[id]||(S.data?.customWoods||[]).find(c=>c.id===id);return w?w.en:id};
 const woodHi=id=>{const w=W[id]||(S.data?.customWoods||[]).find(c=>c.id===id);return w?w.hn||"":""};
 function allWood(id){return W[id]||(S.data?.customWoods||[]).find(c=>c.id===id)}
@@ -324,10 +326,15 @@ function inp(name,label,val,type="text",attrs=""){return `<label class="field"><
 const DEFSET={gst:18,gstMode:"intra",wastage:10,sawing:60,labour:25,margin:15,workDays:26};
 function newMill(p){return{profile:{...p,createdAt:today()},settings:{...DEFSET},people:[],auctions:[],stock:{},customWoods:[],moves:[],orders:[],seq:1}}
 function migrate(d){d=d&&typeof d==="object"?d:{};
-  d.profile=d.profile||{};d.settings=Object.assign({},DEFSET,d.settings);
+  d.profile=d.profile||{};d.profile.owner=d.profile.owner||"Owner";d.profile.mill=d.profile.mill||"My Saw Mill";
+  d.settings=Object.assign({},DEFSET,d.settings);
   for(const k of["people","auctions","customWoods","moves","orders"])if(!Array.isArray(d[k]))d[k]=[];
   if(!d.stock||typeof d.stock!=="object")d.stock={};d.seq=+d.seq||1;
-  d.people.forEach(p=>{p.present=p.present||{}});return d}
+  d.people.forEach(p=>{if(!p||typeof p!=="object")return;p.present=p.present||{};if(!["owner","coowner","labour"].includes(p.type))p.type="labour"});
+  d.orders.forEach(o=>{if(!o||typeof o!=="object")return;o.items=(Array.isArray(o.items)?o.items:[]).filter(i=>i&&typeof i==="object");
+    if(!STATUS[o.status])o.status="quote";o.no=+o.no||0;if(!o.id)o.id=uid()});
+  d.auctions.forEach(a=>{if(a&&typeof a==="object"&&!ASTAT[a.status])a.status="watching"});
+  return d}
 function demoMill(){
   const d=newMill({mill:"Shree Ganesh Saw Mill",owner:"Ramesh Patel",mobile:"9000000000",state:"Madhya Pradesh",district:"Jabalpur",gstin:"",licence:"WBI/JBP/2021/014",demo:true});
   const P=(type,name,role,phone,extra={})=>({id:uid(),type,name,role,phone,active:true,joined:"2022-04-01",present:{},...extra});
@@ -433,7 +440,7 @@ function viewAuth(){
         ${inp("pin",t("pin"),"","password",'required inputmode="numeric" maxlength="6" autocomplete="current-password"')}
         <p class="small" id="authErr" style="color:var(--bad)"></p>
         <button class="btn primary" type="submit">${t("login")}</button>
-        <p class="small muted">Forgot your PIN? In this version, ask the mill owner to reset it from the More tab. The production app sends a one-time password to your mobile.</p>
+        <p class="small muted">Forgot your PIN? While logged in, change it under More → Account. If you are logged out there is no recovery in this version — the production app will send a one-time password to your mobile.</p>
       </form>`}
       <div class="row" style="justify-content:center"><span class="muted small">or</span></div>
       <button class="btn chalk" data-act="demo">${t("tryDemo")}</button>
@@ -523,8 +530,7 @@ function personForm(p){
 
 function viewAuctions(){
   const d=S.data;
-  const mine=[...d.auctions].sort((a,b)=>a.date.localeCompare(b.date));
-  const st=S.auctionState||d.profile.state;
+  const mine=[...d.auctions].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));
   const dir=AUCDIR.filter(a=>!S.auctionState||a.st===S.auctionState);
   return `<div class="topbar"><div><p class="label">Forest depots & e-auctions</p><h1>${t("auctions")}</h1></div><button class="btn primary" data-act="addAuction">+ Add to my diary</button></div>
   <section class="stack"><h2>My auction diary</h2>
@@ -803,8 +809,8 @@ const ACT={
   async copyQuote(){const txt=quoteText(S.draft);const box=$("#copyBox");
     try{await navigator.clipboard.writeText(txt);box.hidden=true;box.value="";toast("Copied. Paste it in WhatsApp.")}catch(e){box.hidden=false;box.value=txt;box.focus();box.select();toast("Select all and copy the text below")}},
   print(){window.print()},
-  async wa(){const o=S.draft;let num=(o.phone||"").replace(/\D/g,"").replace(/^0+/,"");if(num.length===10)num="91"+num;
-    if(/^91\d{10}$/.test(num))window.open("https://wa.me/"+num+"?text="+encodeURIComponent(quoteText(o)),"_blank","noopener");
+  async wa(){const o=S.draft;const m=normMobile(o.phone);
+    if(/^[6-9]\d{9}$/.test(m))window.open("https://wa.me/91"+m+"?text="+encodeURIComponent(quoteText(o)),"_blank","noopener");
     else{toast(o.phone?"That phone number does not look like a 10-digit Indian mobile — quote copied instead.":"No customer phone — quote copied. Add their number to send directly.");await ACT.copyQuote()}},
   allPresent(){const day=S.aDay&&S.aDay<=today()?S.aDay:today();S.data.people.forEach(p=>{if(p.type==="labour"&&p.active)(p.present=p.present||{})[day]=true});persist();render();toast("All active workers marked present")},
   pin(){openModal(`<form class="stack" data-form="pin"><h2>Change PIN</h2>${inp("old","Current PIN","","password",'required inputmode="numeric" maxlength="6" autocomplete="current-password"')}${inp("pin1","New PIN (4–6 digits)","","password",'required inputmode="numeric" maxlength="6" autocomplete="new-password"')}${inp("pin2","Repeat new PIN","","password",'required inputmode="numeric" maxlength="6" autocomplete="new-password"')}<p class="small" id="formErr" style="color:var(--bad)"></p><div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="close">${t("cancel")}</button><button class="btn primary" type="submit">${t("save")}</button></div></form>`)},
@@ -864,7 +870,7 @@ window.addEventListener("beforeunload",e=>{if(S.draft&&S.draft.dirty){e.preventD
 document.addEventListener("submit",async e=>{e.preventDefault();const form=e.target,kind=form.dataset.form;const fd=Object.fromEntries(new FormData(form));const d=S.data;
   const err=(m)=>{const x=form.querySelector("#authErr,#formErr");if(x)x.textContent=m};
   if(kind==="signup"){
-    const mob=(fd.mobile||"").replace(/\D/g,"");
+    const mob=normMobile(fd.mobile);
     if(!fd.mill||!fd.owner)return err("Enter the mill name and owner name.");
     if(!/^[6-9]\d{9}$/.test(mob))return err("Enter a valid 10-digit Indian mobile number.");
     if(!/^\d{4,6}$/.test(fd.pin||""))return err("PIN must be 4 to 6 digits.");
@@ -878,7 +884,7 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
     m.people.push({id:uid(),type:"owner",name:fd.owner.trim(),role:"Owner",phone:mob,share:100,active:true,joined:today(),present:{}});
     await Store.set("mill_"+mob,m);toast("Account created");return enter(mob,m)}
   if(kind==="login"){
-    const mob=(fd.mobile||"").replace(/\D/g,"");await loadAccounts();const a=S.accounts[mob];
+    const mob=normMobile(fd.mobile);await loadAccounts();const a=S.accounts[mob];
     if(!a)return err("No account found for this number. Sign up first, or try the sample mill.");
     const rec=(await Store.get("fail_"+mob))||{n:0,until:0};
     if(Date.now()<rec.until)return err("Too many wrong PINs. Try again in "+Math.ceil((rec.until-Date.now())/6e4)+" min.");
@@ -896,6 +902,7 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
     await Store.set("accounts",S.accounts);closeModal();toast("PIN changed");return}
   if(kind==="person"){
     if(!fd.name)return err("Enter a name.");
+    fd.phone=normMobile(fd.phone);
     if(fd.phone&&!/^\d{10}$/.test(fd.phone))return err("Phone should be 10 digits.");
     if(fd.aadhaar4&&!/^\d{4}$/.test(fd.aadhaar4))return err("Enter only the last 4 digits of Aadhaar.");
     if(form.dataset.type==="labour"&&!fd.consent)return err("Confirm that the worker has agreed to their details being recorded.");

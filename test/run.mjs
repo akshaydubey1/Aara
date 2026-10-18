@@ -178,6 +178,19 @@ const test = `;(async () => {
   const per = lineCft({ mode: "sawn", L: 7, W: 4, T: 2, pcs: 10 }) * 1000;
   ok("receivables excludes quotes/cancelled", Math.abs(receivables() - (per - 100)) < 0.05);
   ok("monthSales counts sold orders", Math.abs(monthSales() - per) < 0.05);
+
+  // mobile normalisation: +91 / leading 0 / spaces and dashes
+  ok("normMobile strips +91, 0, separators",
+    normMobile("+91 98765-01234") === "9876501234" &&
+    normMobile("09876501234") === "9876501234" &&
+    normMobile("919876501234") === "9876501234" &&
+    normMobile("9876501234") === "9876501234");
+
+  // migrate repairs unknown statuses and junk items in imported data
+  const junk = migrate({ profile: {}, orders: [{ status: "weird", items: ["x", { wood: "teak", mode: "sawn" }] }], auctions: [{ status: "nope" }], people: [{ id: "z", type: "boss" }] });
+  ok("migrate repairs statuses/items", junk.orders[0].status === "quote" &&
+     junk.orders[0].items.length === 1 && junk.auctions[0].status === "watching" &&
+     junk.people[0].type === "labour" && junk.profile.owner === "Owner");
 })()`;
 
 const fn = new Function(
