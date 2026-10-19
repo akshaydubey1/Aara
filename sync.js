@@ -14,7 +14,7 @@
 (function(){
 "use strict";
 const CFGK="aara:cloud",SESK="aara:cloudSession",PENDK="aara:cloudPend";
-const NOSYNC=new Set(["cloud","cloudSession","cloudPend","lang","accounts"]);
+const NOSYNC=new Set(["cloud","cloudSession","cloudPend","lang","accounts","prejoin_backup"]);
 const NOSYNC_PRE=["fail_"];   // device-local key families
 const skipKey=k=>NOSYNC.has(k)||NOSYNC_PRE.some(p=>k.startsWith(p));
 let cfg=null,ses=null,store=null,mill=null;
@@ -100,12 +100,19 @@ async function pullAll(){
   for(let i=0;i<localStorage.length;i++){const sk=localStorage.key(i);
     if(sk&&sk.startsWith("aara:"))keys.add(sk.slice(5));
     else if(sk&&sk.startsWith("aarat:"))keys.add(sk.slice(6))}
+  let reverted=0;
   for(const k of keys){if(skipKey(k))continue;
     const lt=store.localT(k),r=remote[k];
     if(!r||lt>(+r.t||0)){const raw=localStorage.getItem("aara:"+k),v=raw==null?null:JSON.parse(raw);
-      if(munshiBlocked(k,v))continue;
+      if(munshiBlocked(k,v)){reverted++;
+        // Undo the refused edit locally so the munshi is never staring at
+        // data the owner will never see — the server version is truth.
+        try{if(r){localStorage.setItem("aara:"+k,JSON.stringify(r.v));localStorage.setItem("aarat:"+k,String(+r.t||0))}
+          else{localStorage.removeItem("aara:"+k);localStorage.removeItem("aarat:"+k)}}catch(e){}
+        continue}
       pushes.push({mill_id:mill.id,key:k,v,t:lt||Date.now()})}}
   if(pushes.length)await api("/rest/v1/mill_data",{method:"POST",headers:{Prefer:"resolution=merge-duplicates"},body:JSON.stringify(pushes)});
+  if(reverted&&typeof toast==="function")toast(reverted+" change(s) need the owner — your local edit was undone.");
   if(window.AaraSyncAfterPull)try{await window.AaraSyncAfterPull()}catch(e){}
   foldAtt();
 }
@@ -181,6 +188,12 @@ async function invite(role){
   await api("/rest/v1/mill_invites",{method:"POST",body:JSON.stringify({code,mill_id:mill.id,role,created_by:ses.user})});
   return code;
 }
+function snapshotScope(){ // keep a device-local copy of everything join wipes
+  const snap={};
+  for(let i=0;i<localStorage.length;i++){const sk=localStorage.key(i);
+    if(sk&&sk.startsWith("aara:")&&!skipKey(sk.slice(5))){try{snap[sk.slice(5)]=JSON.parse(localStorage.getItem(sk))}catch(e){}}}
+  if(Object.keys(snap).length)try{localStorage.setItem("aara:prejoin_backup",JSON.stringify({at:new Date().toISOString(),data:snap}))}catch(e){}
+}
 function clearScope(){ // wipe synced mill-data keys, keep device-local ones
   const kill=[];
   for(let i=0;i<localStorage.length;i++){const sk=localStorage.key(i);if(!sk)continue;
@@ -195,6 +208,7 @@ async function join(code){
   ses.mill=mill.id;try{localStorage.setItem(SESK,JSON.stringify(ses))}catch(e){}
   S.role=mill.role;
   if(store)store.uid=mill.id;
+  snapshotScope();   // local data is preserved under aara:prejoin_backup
   clearScope();
   await pullAll();
   return mill;

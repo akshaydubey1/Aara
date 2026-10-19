@@ -474,6 +474,12 @@ Store.setMany=async function(kvs){const t=Date.now();let ok=true;
   return ok};
 let saveTimer=null;
 function persist(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(S.acct&&S.data)Store.setMill(scope(),S.data)},400)}
+// Any mill-record keys on this device? Used to warn before a join replaces them.
+function localMillKeys(){const out=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||"";
+  if(k.startsWith("aara:")&&/^(idx|mill|core|ord|per|cus|stk|byp|auc|mov|adv)_/.test(k.slice(5)))out.push(k.slice(5))}}catch(e){}return out}
+async function doJoin(code){try{await loadScript("sync.js");const m=await window.AaraSync.join(code);
+  toast("Joined as "+m.role+" — pulling that mill's data…");location.reload()}
+  catch(e){toast("That code did not work — it may be used or expired.")}}
 // Re-read the assembled mill after a pull brings in remote records.
 window.AaraSyncAfterPull=async()=>{if(S.acct&&S.data){const m=await Store.getMill(scope());if(m){S.data=migrate(m);render()}}};
 
@@ -1216,7 +1222,7 @@ function viewMore(){
 function syncCard(){const A=window.AaraSync;
   if(A&&A.connected()){const r=A.role();return `<p class="small">Connected as <b>${esc(A.dest())}</b> · you are <b>${esc(r)}</b> of this mill. Data syncs whenever you are online and always stays on this device too.</p>
     <div class="row"><button class="btn" data-act="syncNow">Sync now</button><button class="btn" data-act="syncMembers">Members</button>${r==="owner"?`<button class="btn" data-act="syncInvite">Invite partner / munshi</button>`:""}<button class="btn" data-act="syncOff">Disconnect</button></div>
-    <form data-form="syncjoin" class="stack"><p class="small muted">Have a code to join someone else's mill? This device's data merges into that mill.</p><div class="row"><input class="inp" name="code" placeholder="Invite code" maxlength="8" autocomplete="off" style="max-width:180px"><button class="btn">Join mill</button></div><p class="small" id="formErr" style="color:var(--bad)"></p></form>`}
+    <form data-form="syncjoin" class="stack"><p class="small muted">Have a code to join someone else's mill? This device adopts that mill's shared data — the owner's copy stays in charge.</p><div class="row"><input class="inp" name="code" placeholder="Invite code" maxlength="10" autocomplete="off" style="max-width:180px"><button class="btn">Join mill</button></div><p class="small" id="formErr" style="color:var(--bad)"></p></form>`}
   const c=A?A.config():{},pend=A?A.pending():"";
   return `<p class="small muted">Optional — Aara works fully without it. To see the same mill on a second phone or computer, create a free Supabase project and run the one-time setup SQL from <code>supabase/schema.sql</code>, then enter its URL and anon key below.</p>
     <form data-form="synccfg" class="stack"><input class="inp" name="url" placeholder="https://yourproject.supabase.co" value="${esc(c.url||"")}" inputmode="url" autocomplete="off"><input class="inp" name="key" placeholder="Anon (public) key" value="${esc(c.key||"")}" autocomplete="off"><input class="inp" name="dest" placeholder="Your email — the sign-in code goes here" value="${esc(pend)}" inputmode="email"><p class="small" id="formErr" style="color:var(--bad)"></p><button class="btn primary">Save &amp; send code</button></form>
@@ -1610,6 +1616,10 @@ const ACT={
     S.pendingImport=null},
   async syncNow(el){el.disabled=true;try{await window.AaraSync.pullAll();toast("Synced");render()}catch(e){toast("Could not reach the server — you may be offline. Nothing was lost.")}el.disabled=false},
   syncOff(){window.AaraSync.disconnect();toast("Disconnected — data stays on this device.");render()},
+  async joinBackup(){const sc=Store.findScope(""),m=sc?await Store.getMill(sc):null;
+    if(m)await saveBlob(new Blob([JSON.stringify({exportedAt:new Date().toISOString(),app:"Aara",version:1,data:m},null,1)],{type:"application/json"}),`aara-backup-before-join-${today()}.json`);
+    else toast("No mill data found to back up.")},
+  async doJoin(){const code=S.pendJoin;S.pendJoin=null;closeModal();if(code)await doJoin(code)},
   syncInvite(){openModal(`<form class="stack" data-form="syncinvite"><h2>Invite to this mill</h2><p class="small muted">A <b>partner</b> sees and edits everything except member management. A <b>munshi</b> can enter orders, customers, payments, attendance and stock — but cannot change settings or delete records.</p><label class="field"><span>Role</span>${sel("role",[["partner","Partner"],["munshi","Munshi"]],"munshi")}</label><p class="small" id="formErr" style="color:var(--bad)"></p><div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="close">${t("cancel")}</button><button class="btn primary" type="submit">Create invite code</button></div></form>`)},
   async syncMembers(){openModal(`<div class="stack"><div class="row between"><h2>Mill members</h2><button class="btn icon" data-act="close">×</button></div><p class="small muted">Loading…</p></div>`);
     try{const ms=await window.AaraSync.members(),me=window.AaraSync.uid&&window.AaraSync.uid(),own=window.AaraSync.role()==="owner";
@@ -1783,10 +1793,16 @@ document.addEventListener("submit",async e=>{e.preventDefault();const form=e.tar
     return}
   if(kind==="syncjoin"){
     if(!fd.code)return err("Enter the invite code.");
-    try{await loadScript("sync.js");const m=await window.AaraSync.join(fd.code);
-      toast("Joined as "+m.role+" — pulling that mill's data…");await window.AaraSync.pullAll();location.reload()}
-    catch(e){err("That code did not work — it may be used or expired.")}
-    return}
+    const code=String(fd.code).trim();
+    // If this phone already holds its own mill records, joining replaces
+    // them — warn first and offer a downloadable backup. A device-local
+    // snapshot is always kept too (aara:prejoin_backup).
+    if(localMillKeys().length){S.pendJoin=code;
+      return openModal(`<div class="stack"><h2>Join someone else's mill?</h2>
+        <p>This phone already has mill records that were never synced. Joining replaces them with that mill's shared copy — the owner stays in charge of the data.</p>
+        <p class="small muted">A safety snapshot is always kept on this device. You can also download a backup file to keep or re-import later.</p>
+        <div class="row" style="justify-content:flex-end;gap:8px;flex-wrap:wrap"><button class="btn" data-act="close">${t("cancel")}</button><button class="btn" data-act="joinBackup">Download backup</button><button class="btn danger" data-act="doJoin">Join anyway</button></div></div>`)}
+    return doJoin(code)}
   if(d&&S.mode==="cloud"&&S.role==="munshi"&&["profile","letterhead","pricing","overheads","person","waTpl","waApi","waBroadcast"].includes(kind))return err("Only the owner or a partner can change this.");
   if(kind==="person"){
     if(!fd.name)return err("Enter a name.");

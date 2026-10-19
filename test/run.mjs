@@ -447,6 +447,7 @@ const test = `;(async () => {
   await A.join(code);   // owner redeems own code: role preserved + local wiped
   ok("join keeps existing role (no self-demotion)", A.role() === "owner" && serverInvites.get(code).used);
   ok("join clears local instead of clobbering owner", !localStorage.getItem("aara:ord_u1_localx") && !serverRows.get("u1|ord_u1_localx") && !!localStorage.getItem("aara:ord_u1_remote1"));
+  ok("join preserves a device-local snapshot", !!localStorage.getItem("aara:prejoin_backup"));
   let again = ""; try { await A.join(code) } catch (e) { again = "rejected" }
   ok("invite code is single-use", again === "rejected");
 
@@ -465,10 +466,16 @@ const test = `;(async () => {
   errBox.v = "";
   await submit("pricing", { wastage: "1", sawing: "1", labour: "1", margin: "1", gst: "0", workDays: "26", recovery: "60", minMargin: "5", gstMode: "intra" });
   ok("munshi cannot change settings", errBox.v.includes("owner") && S.data.settings.margin !== 1);
-  // a munshi's local tombstone is skipped on push, not fatal
+  // a munshi's refused local edit is reverted, not silently kept — the
+  // munshi should never see data the owner never will
   localStorage.removeItem("aara:ord_u1_wiped"); localStorage.setItem("aarat:ord_u1_wiped", String(Date.now() + 99999999));
   await A.pullAll();
-  ok("munshi tombstone skipped not fatal", !serverRows.get("u1|ord_u1_wiped"));
+  ok("munshi never-synced tombstone reverted", !localStorage.getItem("aarat:ord_u1_wiped") && !serverRows.get("u1|ord_u1_wiped"));
+  serverRows.set("u1|keep1", { mill_id: "u1", key: "keep1", v: { safe: true }, t: stamp() });
+  await A.pullAll();   // adopt keep1
+  localStorage.removeItem("aara:keep1"); localStorage.setItem("aarat:keep1", String(Date.now() + 99999999));  // hostile tombstone
+  await A.pullAll();
+  ok("munshi tombstone reverted to server copy", JSON.parse(localStorage.getItem("aara:keep1")).safe === true);
   serverMembers.set("u1|u1", { mill_id: "u1", uid: "u1", role: "owner" }); await A.boot(Store);
 
   // attendance merges per-day: marks travel as own keys and fold back
