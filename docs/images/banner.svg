@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="Aara: the sawmill manager for India">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16321f"/>
+      <stop offset="0.6" stop-color="#1f4a31"/>
+      <stop offset="1" stop-color="#2b5a3b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.78" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#e2ac22" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#e2ac22" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="360" fill="url(#bg)"/>
+  <rect width="1280" height="360" fill="url(#glow)"/>
+  <!-- log end-grain -->
+  <g transform="translate(1010 180)" fill="none" stroke="#f2ead8" stroke-opacity="0.85">
+    <circle r="150" stroke-width="10" stroke="#c98a3a" stroke-opacity="0.9"/>
+    <circle r="126" stroke-width="4"/>
+    <circle r="104" stroke-width="3"/>
+    <circle r="84" stroke-width="3"/>
+    <circle r="66" stroke-width="2.5"/>
+    <circle r="50" stroke-width="2.5"/>
+    <circle r="36" stroke-width="2"/>
+    <circle r="24" stroke-width="2"/>
+    <circle r="12" fill="#e2ac22" stroke="none"/>
+    <path d="M0 -12 L-6 -140" stroke-width="2" stroke-opacity="0.5"/>
+    <path d="M10 6 L118 72" stroke-width="2" stroke-opacity="0.5"/>
+  </g>
+  <!-- painted lot mark -->
+  <g transform="translate(905 300) rotate(-4)">
+    <rect x="0" y="-22" width="128" height="34" rx="4" fill="#e2ac22"/>
+    <text x="64" y="2" text-anchor="middle" font-family="Menlo,Consolas,monospace" font-size="18" font-weight="700" fill="#2a1e00">LOT 117 · CFT</text>
+  </g>
+  <text x="72" y="150" font-family="Rajdhani,'Segoe UI',Helvetica,Arial,sans-serif" font-size="104" font-weight="700" fill="#ffffff" letter-spacing="2">Aara</text>
+  <text x="76" y="200" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="30" fill="#e8efe7">The sawmill manager for India</text>
+  <text x="76" y="252" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="20" fill="#bcd3c1">Stock in CFT · Estimates &amp; GST · Profit · Labour · Auctions · WhatsApp</text>
+  <text x="76" y="290" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="20" fill="#bcd3c1">Works offline · 13 Indian languages · Phone, tablet and computer</text>
+</svg>
